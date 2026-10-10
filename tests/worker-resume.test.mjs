@@ -4,14 +4,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { makeTempDir, initGitRepo, run } from "./helpers.mjs";
-import { buildEnv } from "./fake-codex-fixture.mjs";
-import { installWorkerCodex } from "./worker-codex-fixture.mjs";
-import { readStoredJob } from "../plugins/codex/scripts/lib/job-control.mjs";
-import { writeJobFile } from "../plugins/codex/scripts/lib/state.mjs";
-import { resolveRuntimeOptions } from "../plugins/codex/scripts/lib/runtime-options.mjs";
+import { buildEnv } from "./fake-droid-fixture.mjs";
+import { installWorkerDroid } from "./worker-droid-fixture.mjs";
+import { readStoredJob } from "../plugins/droid/scripts/lib/job-control.mjs";
+import { writeJobFile } from "../plugins/droid/scripts/lib/state.mjs";
+import { resolveRuntimeOptions } from "../plugins/droid/scripts/lib/runtime-options.mjs";
 
-const script = fileURLToPath(new URL("../plugins/codex/scripts/codex-companion.mjs", import.meta.url));
-const THREAD_FIELDS = ["sandbox", "config", "developerInstructions", "cwd"];
+const script = fileURLToPath(new URL("../plugins/droid/scripts/droid-companion.mjs", import.meta.url));
+const THREAD_FIELDS = ["cwd"];
 const JOB_FIELDS = ["write", "worktree", "lockCmd", "unlockCmd", "outputSchema", "pauseAndAsk", "effectiveProfile", "activeServers", "developerInstructions", "config", "sandbox"];
 const pick = (object, fields) => Object.fromEntries(fields.map(field => [field, object[field] ?? null]));
 
@@ -25,21 +25,16 @@ function linkedWorktree() {
   const main = makeTempDir(); initGitRepo(main);
   fs.writeFileSync(path.join(main, "README.md"), "hello\n");
   git(main, "add", "README.md"); git(main, "commit", "-m", "init");
-  const linked = makeTempDir("codex-plugin-linked-");
+  const linked = makeTempDir("droid-plugin-linked-");
   git(main, "worktree", "add", "-b", "slice", linked);
   return { main: fs.realpathSync(main), linked: fs.realpathSync(linked), gitDir: fs.realpathSync(git(linked, "rev-parse", "--absolute-git-dir")) };
 }
 
-function writeProfile(codexHome, name, roots) {
-  fs.writeFileSync(path.join(codexHome, `${name}.config.toml`), `sandbox_mode = "workspace-write"\n\n[sandbox_workspace_write]\nwritable_roots = ${JSON.stringify(roots)}\nnetwork_access = true\n`);
-}
-
 function setup(brief = "Count rows") {
   const { main, linked, gitDir } = linkedWorktree();
-  const bin = makeTempDir(); installWorkerCodex(bin);
+  const bin = makeTempDir(); installWorkerDroid(bin);
   const files = makeTempDir();
-  const env = { ...buildEnv(bin), CODEX_HOME: makeTempDir(), CODEX_COMPANION_SESSION_ID: "resume-tests" };
-  writeProfile(env.CODEX_HOME, "edu-test", [path.join(main, ".git")]);
+  const env = { ...buildEnv(bin), DROID_HOME: makeTempDir(), DROID_COMPANION_SESSION_ID: "resume-tests" };
   const file = (name, content) => { const target = path.join(files, name); fs.writeFileSync(target, content); return target; };
   const paths = {
     schema: file("schema.json", JSON.stringify({ type: "object", required: ["count"], properties: { count: { type: "integer" } }, additionalProperties: false })),
@@ -55,11 +50,11 @@ function setup(brief = "Count rows") {
     assert.equal(result.status, 0, result.stderr + result.stdout);
     return JSON.parse(result.stdout);
   };
-  const fake = () => JSON.parse(fs.readFileSync(path.join(bin, "fake-codex-state.json"), "utf8"));
+  const fake = () => JSON.parse(fs.readFileSync(path.join(bin, "fake-droid-state.json"), "utf8"));
   const lockEvents = () => fs.readFileSync(paths.lockLog, "utf8").trim().split("\n");
   const start = (...extra) => cli("task", "--write", "--worktree", linked,
     "--lock-cmd", `echo lock >> '${paths.lockLog}'`, "--unlock-cmd", `echo unlock >> '${paths.lockLog}'`,
-    "--profile", "edu-test", "--mcp-config", paths.mcp, "--name", "slice-one", "--pause-and-ask",
+     "--name", "slice-one", "--pause-and-ask",
     "--brief", paths.brief, "--instructions", paths.autonomy, "--preread", paths.plan,
     "--output-schema", paths.schema, ...extra, "Start the slice");
   return { main, linked, gitDir, env, files, paths, cli, fake, lockEvents, start };
@@ -67,11 +62,11 @@ function setup(brief = "Count rows") {
 
 function assertInherited(ctx, original, resumed) {
   const requests = ctx.fake().threadRequests;
-  const started = requests.find(entry => entry.method === "thread/start" && entry.threadId === original.threadId);
+  const started = requests.find(entry => entry.method === "start" && entry.threadId === original.threadId);
   const continued = requests.at(-1);
-  assert.equal(continued.method, "thread/resume");
+  assert.equal(continued.method, "resume");
   assert.equal(continued.threadId, original.threadId);
-  assert.equal(continued.sandbox, "workspace-write");
+  assert.equal(continued.args[continued.args.indexOf("--auto") + 1], "medium");
   assert.deepEqual(pick(continued, THREAD_FIELDS), pick(started, THREAD_FIELDS));
   assert.deepEqual(pick(readStoredJob(ctx.linked, resumed.jobId), JOB_FIELDS), pick(readStoredJob(ctx.linked, original.jobId), JOB_FIELDS));
   assert.deepEqual(ctx.lockEvents(), ["lock", "unlock", "lock", "unlock"]);
@@ -108,9 +103,9 @@ test("answer keeps the paused job's id, thread, write access, lock, and result-f
   assert.equal(answered.status, "completed");
   assert.equal(answered.jobId, paused.jobId);
   const requests = ctx.fake().threadRequests;
-  assert.deepEqual(pick(requests.at(-1), THREAD_FIELDS), pick(requests.find(entry => entry.method === "thread/start"), THREAD_FIELDS));
-  assert.equal(requests.at(-1).sandbox, "workspace-write");
-  assert.match(requests.at(-1).developerInstructions, /Never push\.[\s\S]*JSON stop report/);
+  assert.deepEqual(pick(requests.at(-1), THREAD_FIELDS), pick(requests.find(entry => entry.method === "start"), THREAD_FIELDS));
+  assert.ok(requests.at(-1).args.includes("medium"));
+  assert.match(ctx.fake().lastTurnStart.prompt, /Never push\.[\s\S]*JSON stop report/);
   assert.deepEqual(ctx.lockEvents(), ["lock", "unlock", "lock", "unlock"]);
   assert.equal(JSON.parse(fs.readFileSync(published, "utf8")).status, "completed");
 });
@@ -120,7 +115,7 @@ test("a resume never re-sends the previous slice's brief or preread", () => {
   ctx.start();
   ctx.cli("sessions", "resume", "slice-one", "Next slice");
   const prompt = ctx.fake().lastTurnStart.prompt;
-  assert.match(prompt, /^Next slice/);
+  assert.match(prompt, /\nNext slice\n/);
   assert.doesNotMatch(prompt, /brief-sentinel|plan-sentinel/);
 });
 
@@ -135,7 +130,7 @@ test("resume flags override the inherited options", () => {
   assert.deepEqual(stored.outputSchema, JSON.parse(fs.readFileSync(ctx.paths.otherSchema, "utf8")));
   assert.equal(stored.model, "override-model");
   assert.equal(stored.lockCmd, readStoredJob(ctx.linked, original.jobId).lockCmd);
-  assert.equal(ctx.fake().threadRequests.at(-1).sandbox, "workspace-write");
+  assert.ok(ctx.fake().threadRequests.at(-1).args.includes("medium"));
 });
 
 test("resume keeps the previous slice's result file unless it is the same job", () => {
@@ -175,50 +170,6 @@ test("answer publishes to the paused job's own result file", () => {
   assert.equal(published.status, "completed");
 });
 
-test("a write job on a linked worktree sends its gitdir as a writable root when a granted root contains it", () => {
-  const ctx = setup();
-  ctx.start();
-  const roots = ctx.fake().threadRequests[0].config.sandbox_workspace_write.writable_roots;
-  assert.deepEqual(roots, [path.join(ctx.main, ".git"), ctx.gitDir]);
-});
-
-test("the linked-worktree gitdir is granted only by containment under a workspace-write sandbox", async () => {
-  const { main, linked, gitDir } = linkedWorktree();
-  const codexHome = makeTempDir();
-  const previous = process.env.CODEX_HOME;
-  process.env.CODEX_HOME = codexHome;
-  try {
-    const roots = async (options) => (await resolveRuntimeOptions(options.cwd ?? linked, options)).config?.sandbox_workspace_write?.writable_roots ?? null;
-    const unrelated = makeTempDir();
-    writeProfile(codexHome, "covers", [path.join(main, ".git")]);
-    writeProfile(codexHome, "unrelated", [unrelated]);
-    fs.writeFileSync(path.join(codexHome, "readonly.config.toml"), `sandbox_mode = "read-only"\n\n[sandbox_workspace_write]\nwritable_roots = ${JSON.stringify([path.join(main, ".git")])}\n`);
-    assert.deepEqual(await roots({ profile: "covers", write: true }), [path.join(main, ".git"), gitDir]);
-    assert.deepEqual(await roots({ profile: "unrelated", write: true }), [unrelated]);
-    assert.deepEqual(await roots({ profile: "readonly", write: true }), [path.join(main, ".git")]);
-    assert.deepEqual(await roots({ profile: "covers", write: true, cwd: main }), [path.join(main, ".git")]);
-    fs.writeFileSync(path.join(codexHome, "config.toml"), `[sandbox_workspace_write]\nwritable_roots = ${JSON.stringify([path.join(main, ".git")])}\nnetwork_access = true\n`);
-    const plain = await resolveRuntimeOptions(linked, { write: true });
-    assert.deepEqual(plain.config, { "sandbox_workspace_write.writable_roots": [path.join(main, ".git"), gitDir] });
-    assert.deepEqual(await resolveRuntimeOptions(linked, {}), {});
-  } finally {
-    if (previous === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = previous;
-  }
-});
-
-test("a resume waits out a released thread that is still closing", () => {
-  const repo = makeTempDir(); initGitRepo(repo);
-  const bin = makeTempDir(); installWorkerCodex(bin, "resume-while-closing");
-  const env = { ...buildEnv(bin), CODEX_HOME: makeTempDir(), CODEX_COMPANION_SESSION_ID: "closing-tests" };
-  const initial = run(process.execPath, [script, "task", "--json", "Start"], { cwd: repo, env });
-  assert.equal(initial.status, 0, initial.stderr);
-  const resumed = run(process.execPath, [script, "task", "--resume-last", "--json", "follow up"], { cwd: repo, env });
-  assert.equal(resumed.status, 0, resumed.stderr);
-  const fake = JSON.parse(fs.readFileSync(path.join(bin, "fake-codex-state.json"), "utf8"));
-  assert.equal(fake.rejectedClosingResume, true);
-  assert.equal(fake.lastTurnStart.threadId, JSON.parse(initial.stdout).threadId);
-});
-
 test("a resume refuses to move the session to another worktree or rename it", () => {
   const ctx = setup();
   ctx.start();
@@ -240,7 +191,7 @@ test("a session recorded before worker arguments were kept resumes from its stor
   assert.match(rejected.stderr, /predates resume overrides/);
   const resumed = ctx.cli("sessions", "resume", "slice-one", "Next slice");
   assert.equal(resumed.status, "completed");
-  assert.equal(ctx.fake().threadRequests.at(-1).sandbox, "workspace-write");
+  assert.ok(ctx.fake().threadRequests.at(-1).args.includes("medium"));
   assert.equal(readStoredJob(ctx.linked, resumed.jobId).resultFile, null);
   assert.equal(JSON.parse(fs.readFileSync(first, "utf8")).jobId, original.jobId);
 });

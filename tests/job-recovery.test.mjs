@@ -6,12 +6,12 @@ import net from "node:net";
 import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
 import { makeTempDir, initGitRepo } from "./helpers.mjs";
-import { runTrackedJob, reconcileOrphanedJobs } from "../plugins/codex/scripts/lib/tracked-jobs.mjs";
-import { emitJobEvent } from "../plugins/codex/scripts/lib/job-results.mjs";
-import { readJobFile, resolveJobFile } from "../plugins/codex/scripts/lib/state.mjs";
+import { runTrackedJob, reconcileOrphanedJobs } from "../plugins/droid/scripts/lib/tracked-jobs.mjs";
+import { emitJobEvent } from "../plugins/droid/scripts/lib/job-results.mjs";
+import { readJobFile, resolveJobFile } from "../plugins/droid/scripts/lib/state.mjs";
 
-const lifecycleUrl = new URL("../plugins/codex/scripts/lib/tracked-jobs.mjs", import.meta.url).href;
-const stateUrl = new URL("../plugins/codex/scripts/lib/state.mjs", import.meta.url).href;
+const lifecycleUrl = new URL("../plugins/droid/scripts/lib/tracked-jobs.mjs", import.meta.url).href;
+const stateUrl = new URL("../plugins/droid/scripts/lib/state.mjs", import.meta.url).href;
 const quote = text => `'${text.replaceAll("'", "'\\''")}'`;
 function command(source) { return `${quote(process.execPath)} -e ${quote(source)}`; }
 function child(source) {
@@ -42,8 +42,8 @@ function installBarrier(job, condition, after = false) {
 function locking(workspaceRoot) {
   const external = makeTempDir();
   const held = path.join(external, "held"), effects = path.join(external, "effects");
-  return { held, effects, lockCmd: command(`const fs=require('fs'); fs.writeFileSync(${JSON.stringify(held)}, process.env.CODEX_JOB_LOCK_TOKEN);`),
-    unlockCmd: command(`const fs=require('fs'); const p=${JSON.stringify(held)}; if(fs.existsSync(p) && fs.readFileSync(p,'utf8')===process.env.CODEX_JOB_LOCK_TOKEN) { fs.unlinkSync(p); fs.appendFileSync(${JSON.stringify(effects)}, 'release\\n'); }`) };
+  return { held, effects, lockCmd: command(`const fs=require('fs'); fs.writeFileSync(${JSON.stringify(held)}, process.env.DROID_JOB_LOCK_TOKEN);`),
+    unlockCmd: command(`const fs=require('fs'); const p=${JSON.stringify(held)}; if(fs.existsSync(p) && fs.readFileSync(p,'utf8')===process.env.DROID_JOB_LOCK_TOKEN) { fs.unlinkSync(p); fs.appendFileSync(${JSON.stringify(effects)}, 'release\\n'); }`) };
 }
 
 for (const boundary of ["acquire", "release", "terminal"]) {
@@ -51,7 +51,7 @@ for (const boundary of ["acquire", "release", "terminal"]) {
     const workspaceRoot = makeTempDir();
     const locks = locking(workspaceRoot);
     const deliveries = path.join(workspaceRoot, "deliveries");
-    const hook = command(`require('fs').appendFileSync(${JSON.stringify(deliveries)}, process.env.CODEX_JOB_DELIVERY_ID+'\\n')`);
+    const hook = command(`require('fs').appendFileSync(${JSON.stringify(deliveries)}, process.env.DROID_JOB_DELIVERY_ID+'\\n')`);
     const job = { id: boundary, workspaceRoot, lockCmd: locks.lockCmd, unlockCmd: locks.unlockCmd, hooks: { end: hook, fail: hook } };
     const condition = boundary === "acquire" ? 'record.externalLock?.state === "acquired"' : boundary === "release" ? 'record.externalLock?.state === "released"' : 'record.status === "completed"';
     const subprocess = child(`${installBarrier(job, condition, boundary === "terminal")}
@@ -76,7 +76,7 @@ for (const boundary of ["acquire", "release", "terminal"]) {
 test("terminal delivery retries a failed hook using the same idempotency key", async () => {
   const workspaceRoot = makeTempDir();
   const observed = path.join(workspaceRoot, "observed"), allowed = path.join(workspaceRoot, "allowed");
-  const hook = command(`const fs=require('fs'); fs.appendFileSync(${JSON.stringify(observed)},process.env.CODEX_JOB_DELIVERY_ID+'\\n'); if(!fs.existsSync(${JSON.stringify(allowed)})) process.exit(1);`);
+  const hook = command(`const fs=require('fs'); fs.appendFileSync(${JSON.stringify(observed)},process.env.DROID_JOB_DELIVERY_ID+'\\n'); if(!fs.existsSync(${JSON.stringify(allowed)})) process.exit(1);`);
   await runTrackedJob({ id: "retry", workspaceRoot, hooks: { end: hook } }, async () => ({ exitStatus: 0 }));
   const first = readJobFile(resolveJobFile(workspaceRoot, "retry"));
   assert.equal(first.terminalDelivery.delivered, false);
@@ -186,7 +186,7 @@ test("serialized worktree writers snapshot only inside their own lock segment", 
 
 test("SIGKILL after terminal hook execution replays the stable id without duplicating its effect", { timeout: 20000 }, async () => {
   const workspaceRoot = makeTempDir(), effects = path.join(workspaceRoot, "effect"), attempts = path.join(workspaceRoot, "attempts");
-  const hook = command(`const fs=require('fs'), id=process.env.CODEX_JOB_DELIVERY_ID; fs.appendFileSync(${JSON.stringify(attempts)},id+'\\n'); if(!fs.existsSync(${JSON.stringify(effects)})) fs.writeFileSync(${JSON.stringify(effects)},id+'\\n');`);
+  const hook = command(`const fs=require('fs'), id=process.env.DROID_JOB_DELIVERY_ID; fs.appendFileSync(${JSON.stringify(attempts)},id+'\\n'); if(!fs.existsSync(${JSON.stringify(effects)})) fs.writeFileSync(${JSON.stringify(effects)},id+'\\n');`);
   const job = { id: "ack-crash", workspaceRoot, hooks: { end: hook } };
   const subprocess = child(`${installBarrier(job, 'record.terminalDelivery?.delivered === true')}
     import { runTrackedJob } from ${JSON.stringify(lifecycleUrl)};

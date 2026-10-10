@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { makeTempDir } from "./helpers.mjs";
-import { parseArgs } from "../plugins/codex/scripts/lib/args.mjs";
-import { fieldDisagreements, readWorkerContext } from "../plugins/codex/scripts/lib/worker-context.mjs";
+import { parseArgs } from "../plugins/droid/scripts/lib/args.mjs";
+import { fieldDisagreements, readWorkerContext } from "../plugins/droid/scripts/lib/worker-context.mjs";
 
 test("comparison reports nested values, types, array positions and missing keys", () => {
   assert.deepEqual(fieldDisagreements(

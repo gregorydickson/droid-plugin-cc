@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { makeTempDir } from "./helpers.mjs";
-import { resolveJobFile } from "../plugins/codex/scripts/lib/state.mjs";
-import { startWorkerControl, sendWorkerMessage } from "../plugins/codex/scripts/lib/worker-control.mjs";
+import { resolveJobFile } from "../plugins/droid/scripts/lib/state.mjs";
+import { startWorkerControl, sendWorkerMessage } from "../plugins/droid/scripts/lib/worker-control.mjs";
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 

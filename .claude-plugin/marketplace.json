@@ -1,21 +1,21 @@
 {
-  "name": "codex-fork",
+  "name": "droid-fork",
   "owner": {
-    "name": "OpenAI (forked by gregorydickson)"
+    "name": "gregorydickson"
   },
   "metadata": {
-    "description": "Fork of openai/codex-plugin-cc. Upstream is unmaintained; this carries local fixes to the review background/collection path. The plugin id stays `codex`, so /codex:* commands are unchanged.",
-    "version": "1.0.14"
+    "version": "0.1.0",
+    "description": "Droid for Claude Code: reviews and durable delegated jobs."
   },
   "plugins": [
     {
-      "name": "codex",
-      "description": "Use Codex from Claude Code to review code or delegate tasks.",
-      "version": "1.0.14",
+      "name": "droid",
+      "description": "Use Droid from Claude Code to review code or delegate tasks.",
+      "version": "0.1.0",
       "author": {
-        "name": "OpenAI"
+        "name": "gregorydickson"
       },
-      "source": "./plugins/codex"
+      "source": "./plugins/droid"
     }
   ]
 }

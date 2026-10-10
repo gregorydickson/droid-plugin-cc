@@ -4,14 +4,16 @@ import fs from "node:fs";
 import path from "node:path";
 import net from "node:net";
 import { makeTempDir, initGitRepo, run } from "./helpers.mjs";
-import { runTrackedJob, finalizeTrackedJob, reconcileOrphanedJobs } from "../plugins/codex/scripts/lib/tracked-jobs.mjs";
-import { resultEnvelope } from "../plugins/codex/scripts/lib/job-results.mjs";
-import { writeJobFile, upsertJob, readJobFile, resolveJobFile } from "../plugins/codex/scripts/lib/state.mjs";
-import { validateWorktree } from "../plugins/codex/scripts/lib/worktree-jobs.mjs";
+import { runTrackedJob, finalizeTrackedJob, reconcileOrphanedJobs } from "../plugins/droid/scripts/lib/tracked-jobs.mjs";
+import { resultEnvelope } from "../plugins/droid/scripts/lib/job-results.mjs";
+import { writeJobFile, upsertJob, readJobFile, resolveJobFile } from "../plugins/droid/scripts/lib/state.mjs";
+import { validateWorktree } from "../plugins/droid/scripts/lib/worktree-jobs.mjs";
 
 function cleanupWatchdog(t, workspaceRoot, jobId) {
   t.after(() => {
-    const pid = readJobFile(resolveJobFile(workspaceRoot, jobId)).watchdogPid;
+    const file = resolveJobFile(workspaceRoot, jobId);
+    if (!fs.existsSync(file)) return;
+    const pid = readJobFile(file).watchdogPid;
     if (pid) { try { process.kill(pid, "SIGTERM"); } catch (error) { if (error.code !== "ESRCH") throw error; } }
   });
 }
@@ -27,14 +29,19 @@ test("typed envelope preserves invalid raw output and enforces schema constraint
   assert.equal(malformed.schemaValid, false); assert.equal(malformed.rawOutput, "not json"); assert.equal(malformed.result, null);
 });
 
-test("cancel wins late completion; result, socket and end hook run once", async () => {
+test("cancel wins late completion; result, socket and end hook run once", async t => {
   const workspaceRoot = makeTempDir();
   const hookFile = path.join(workspaceRoot, "hook");
   const socketPath = path.join(workspaceRoot, "socket");
   const events = [];
   let received; const receivedEvents = new Promise(resolve => received = resolve);
   const server = net.createServer(socket => { let data = ""; socket.on("data", chunk => data += chunk); socket.on("data", () => { if (data.endsWith("\n")) { events.push(JSON.parse(data)); if (events.length === 2) received(); } }); });
-  await new Promise(resolve => server.listen(socketPath, resolve));
+  try {
+    await new Promise((resolve, reject) => { server.once("error", reject); server.listen(socketPath, resolve); });
+  } catch (error) {
+    if (error.code === "EPERM") { t.skip("Sandbox forbids Unix socket listeners"); return; }
+    throw error;
+  }
   const job = { id: "cancel", workspaceRoot, resultFile: path.join(workspaceRoot, "result.json"), notifySocket: socketPath, hooks: { end: `echo done >> '${hookFile}'` } };
   try {
     await runTrackedJob(job, async () => {
@@ -110,10 +117,15 @@ test("detached watchdog publishes crash result and unlocks without status pollin
       if (data.endsWith("\n")) { const event = JSON.parse(data); if (event.event === "fail") finishSignal(event); }
     });
   });
-  await new Promise(resolve => server.listen(socketPath, resolve));
+  try {
+    await new Promise((resolve, reject) => { server.once("error", reject); server.listen(socketPath, resolve); });
+  } catch (error) {
+    if (error.code === "EPERM") { t.skip("Sandbox forbids Unix socket listeners"); return; }
+    throw error;
+  }
   const job = { id: "crash", workspaceRoot, structured: true, resultFile, notifySocket: socketPath,
     lockCmd: `touch '${lockFile}'`, unlockCmd: `rm '${lockFile}'`, hooks: { fail: `echo failed >> '${hookFile}'` } };
-  const source = `import { runTrackedJob } from ${JSON.stringify(new URL("../plugins/codex/scripts/lib/tracked-jobs.mjs", import.meta.url).href)};\nawait runTrackedJob(${JSON.stringify(job)}, async () => { process.stdout.write("ready\\n"); await new Promise(() => { setInterval(() => {}, 1000); }); });`;
+  const source = `import { runTrackedJob } from ${JSON.stringify(new URL("../plugins/droid/scripts/lib/tracked-jobs.mjs", import.meta.url).href)};\nawait runTrackedJob(${JSON.stringify(job)}, async () => { process.stdout.write("ready\\n"); await new Promise(() => { setInterval(() => {}, 1000); }); });`;
   const worker = spawn(process.execPath, ["--input-type=module", "-e", source], { stdio: ["ignore", "pipe", "pipe"] });
   try {
     await new Promise((resolve, reject) => {

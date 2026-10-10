@@ -1,20 +1,20 @@
 import fs from "node:fs";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { writeJobFile, upsertJob } from "../plugins/codex/scripts/lib/state.mjs";
-import { readStoredJob } from "../plugins/codex/scripts/lib/job-control.mjs";
+import { writeJobFile, upsertJob } from "../plugins/droid/scripts/lib/state.mjs";
+import { readStoredJob } from "../plugins/droid/scripts/lib/job-control.mjs";
 import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { makeTempDir, initGitRepo, run } from "./helpers.mjs";
-import { buildEnv } from "./fake-codex-fixture.mjs";
-import { installWorkerCodex } from "./worker-codex-fixture.mjs";
-const script = fileURLToPath(new URL("../plugins/codex/scripts/codex-companion.mjs", import.meta.url));
+import { buildEnv } from "./fake-droid-fixture.mjs";
+import { installWorkerDroid } from "./worker-droid-fixture.mjs";
+const script = fileURLToPath(new URL("../plugins/droid/scripts/droid-companion.mjs", import.meta.url));
 function setup(behavior) {
   const root = makeTempDir(); initGitRepo(root);
-  const bin = makeTempDir(); installWorkerCodex(bin, behavior);
-  const env = { ...buildEnv(bin), CODEX_HOME: makeTempDir(), CODEX_COMPANION_SESSION_ID: "worker-tests" };
+  const bin = makeTempDir(); installWorkerDroid(bin, behavior);
+  const env = { ...buildEnv(bin), DROID_HOME: makeTempDir(), DROID_COMPANION_SESSION_ID: "worker-tests" };
   const schema = path.join(root, "schema.json");
   fs.writeFileSync(schema, JSON.stringify({ type: "object", required: ["count"], properties: { count: { type: "integer" } }, additionalProperties: false }));
   const cli = (...args) => {
@@ -103,7 +103,7 @@ test("stopped named sessions resume their thread with private configuration inta
   const { root, cli } = setup();
   const secret = "credential-sentinel-never-public";
   fs.writeFileSync(path.join(root, "mcp.json"), JSON.stringify({ mcp_servers: { private: { command: "unused", env: { TOKEN: secret } } } }));
-  const initial = cli("task", "--name", "private-session", "--pause-and-ask", "--mcp-config", "mcp.json", "--on-end", `true ${secret}`, "NEED_ANSWER");
+  const initial = cli("task", "--name", "private-session", "--pause-and-ask",  "--on-end", `true ${secret}`, "NEED_ANSWER");
   assert.equal(initial.status, "awaiting-answer");
   assert.ok(!JSON.stringify(initial).includes(secret));
   for (const args of [["status", "--all-sessions"], ["status", initial.jobId], ["sessions", "list"], ["result", initial.jobId]]) {
@@ -120,8 +120,7 @@ test("stopped named sessions resume their thread with private configuration inta
   assert.notEqual(resumed.jobId, initial.jobId);
   assert.ok(!JSON.stringify(resumed).includes(secret));
   // The secret is excluded from public output, while the next turn still has its config.
-  const { config } = readStoredJob(root, resumed.jobId).request;
-  assert.equal(config.mcp_servers.private.env.TOKEN, secret);
+  assert.match(readStoredJob(root, resumed.jobId).request.hooks.end, new RegExp(secret));
 });
 
 test("cancel reports a pending request while another process owns finalization", () => {
@@ -161,4 +160,29 @@ test("cancel reports publication failure after the signalled finalizer exits", a
   assert.equal(report.error, "result_file_failed");
   assert.equal(Object.hasOwn(report, "cancellationRequested"), false);
   assert.equal(readStoredJob(root, job.id).status, "failed");
+});
+
+test("cancel kills the Droid process group including descendants that ignore SIGTERM", { timeout: 20000 }, async t => {
+  const { bin, cli } = setup("stubborn-task");
+  const launched = cli("task", "--background", "Wait for cancellation");
+  const file = path.join(bin, "fake-droid-state.json");
+  let state;
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(file)) {
+      state = JSON.parse(fs.readFileSync(file));
+      if (state.descendantPid) break;
+    }
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  assert.ok(state?.descendantPid, "Droid did not start its descendant");
+  t.after(() => { for (const pid of [state.rootPid, state.descendantPid]) { try { process.kill(pid, "SIGKILL"); } catch {} } });
+  const cancelled = cli("cancel", launched.jobId);
+  assert.equal(cancelled.status, "cancelled");
+  const alive = pid => { try { process.kill(pid, 0); return true; } catch (error) { if (error.code === "ESRCH") return false; throw error; } };
+  const stopDeadline = Date.now() + 5000;
+  while ((alive(state.rootPid) || alive(state.descendantPid)) && Date.now() < stopDeadline) await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(alive(state.rootPid), false, "Droid survived cancellation");
+  assert.equal(alive(state.descendantPid), false, "Droid descendant survived cancellation");
+  assert.equal(cli("result", launched.jobId).status, "cancelled");
 });

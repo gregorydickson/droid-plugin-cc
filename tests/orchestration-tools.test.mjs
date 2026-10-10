@@ -4,16 +4,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { makeTempDir, initGitRepo, run } from "./helpers.mjs";
-import { buildEnv } from "./fake-codex-fixture.mjs";
-import { installWorkerCodex } from "./worker-codex-fixture.mjs";
+import { buildEnv } from "./fake-droid-fixture.mjs";
+import { installWorkerDroid } from "./worker-droid-fixture.mjs";
 
-const SCRIPT = fileURLToPath(new URL("../plugins/codex/scripts/codex-companion.mjs", import.meta.url));
+const SCRIPT = fileURLToPath(new URL("../plugins/droid/scripts/droid-companion.mjs", import.meta.url));
 function fixture(behavior) {
   const cwd = makeTempDir();
   const bin = makeTempDir();
   initGitRepo(cwd);
-  installWorkerCodex(bin, behavior);
-  const env = { ...buildEnv(bin), CODEX_HOME: makeTempDir(), CLAUDE_PLUGIN_DATA: makeTempDir() };
+  installWorkerDroid(bin, behavior);
+  const env = { ...buildEnv(bin), DROID_HOME: makeTempDir(), CLAUDE_PLUGIN_DATA: makeTempDir() };
   const schema = { type: "object", additionalProperties: false, required: ["count"], properties: { count: { type: "integer" } } };
   fs.writeFileSync(path.join(cwd, "brief.md"), "Count rows");
   fs.writeFileSync(path.join(cwd, "schema.json"), JSON.stringify(schema));
@@ -26,7 +26,7 @@ test("compare validates both outputs, feeds the same brief/schema to the peer, a
   const result = command("compare", "--brief", "brief.md", "--schema", "schema.json", "--against", `${JSON.stringify(process.execPath)} peer.cjs`);
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout), {
-    codex: { count: 2 }, peer: { count: 3 },
+    droid: { count: 2 }, peer: { count: 3 },
     disagreements: [{ field: "$.count", left: 2, right: 3, leftMissing: false, rightMissing: false }]
   });
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(cwd, "peer-input.json"), "utf8")), { brief: "Count rows", schema });
@@ -85,16 +85,16 @@ for (const behavior of ["review-ok", "invalid-claim-verdict"]) {
     const claim = { id: "pinned-claim", text: "The source contains pinned evidence", path: "source.txt", line: 1, sha };
     fs.writeFileSync(path.join(cwd, "claims.json"), JSON.stringify([claim]));
     const result = command("verify-claims", "claims.json");
-    const request = JSON.parse(fs.readFileSync(path.join(bin, "fake-codex-state.json"))).lastTurnStart;
+    const request = JSON.parse(fs.readFileSync(path.join(bin, "fake-droid-state.json"))).turns[0];
     assert.match(request.prompt, new RegExp(`only against commit ${sha}`));
-    assert.deepEqual(JSON.parse(request.prompt.slice(request.prompt.indexOf('\n{"claim"') + 1)), { claim, source: "pinned evidence\n" });
+    assert.deepEqual(JSON.parse(request.prompt.slice(request.prompt.indexOf('\n{"claim"') + 1).split("\n\nReturn only JSON")[0]), { claim, source: "pinned evidence\n" });
     assert.ok(!request.prompt.includes("uncommitted conflicting"));
     if (behavior === "review-ok") {
       assert.equal(result.status, 0, result.stderr);
       assert.deepEqual(JSON.parse(result.stdout), [{ id: claim.id, verdict: "holds", evidence: "source.txt:1@pinned" }]);
     } else {
       assert.notEqual(result.status, 0);
-      assert.match(result.stderr + result.stdout, /Claim verifier output failed schema validation/);
+      assert.match(result.stderr + result.stdout, /schema validation/);
     }
   });
 }

@@ -5,10 +5,10 @@ import { once } from "node:events";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { makeTempDir } from "./helpers.mjs";
-import { writeJobFile, upsertJob, loadState } from "../plugins/codex/scripts/lib/state.mjs";
-import { finalizeTrackedJob, reconcileOrphanedJobs } from "../plugins/codex/scripts/lib/tracked-jobs.mjs";
+import { writeJobFile, upsertJob, loadState } from "../plugins/droid/scripts/lib/state.mjs";
+import { finalizeTrackedJob, reconcileOrphanedJobs } from "../plugins/droid/scripts/lib/tracked-jobs.mjs";
 
-const trackedUrl = new URL("../plugins/codex/scripts/lib/tracked-jobs.mjs", import.meta.url).href;
+const trackedUrl = new URL("../plugins/droid/scripts/lib/tracked-jobs.mjs", import.meta.url).href;
 const pauseBuffer = new Int32Array(new SharedArrayBuffer(4));
 
 async function waitForFile(file) {

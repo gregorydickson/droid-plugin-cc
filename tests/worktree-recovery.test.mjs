@@ -5,8 +5,8 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { makeTempDir, initGitRepo, run } from "./helpers.mjs";
-import { snapshotChangedFiles, changedFilesSince, SNAPSHOT_LIMITS } from "../plugins/codex/scripts/lib/worktree-jobs.mjs";
-import { saveState, upsertJob, writeJobFile, readJobFile, resolveJobFile, loadState } from "../plugins/codex/scripts/lib/state.mjs";
+import { snapshotChangedFiles, changedFilesSince, SNAPSHOT_LIMITS } from "../plugins/droid/scripts/lib/worktree-jobs.mjs";
+import { saveState, upsertJob, writeJobFile, readJobFile, resolveJobFile, loadState } from "../plugins/droid/scripts/lib/state.mjs";
 
 function git(root, ...args) {
   const result = run("git", args, { cwd: root });
@@ -48,7 +48,7 @@ test("SessionEnd finds linked-worktree ownership even without main-worktree stat
     const record = { ...job, workspaceRoot: linked, status: "running" };
     writeJobFile(linked, job.id, record); upsertJob(linked, record);
   }
-  const result = spawnSync(process.execPath, [new URL("../plugins/codex/scripts/session-lifecycle-hook.mjs", import.meta.url).pathname, "SessionEnd"], {
+  const result = spawnSync(process.execPath, [new URL("../plugins/droid/scripts/session-lifecycle-hook.mjs", import.meta.url).pathname, "SessionEnd"], {
     cwd: root, encoding: "utf8", timeout: 15000, input: JSON.stringify({ cwd: root, session_id: "ending" })
   });
   assert.equal(result.status, 0, result.stderr);
@@ -76,7 +76,7 @@ test("optional snapshot budget failure is visible without preventing a read-only
   const root = makeTempDir(); initGitRepo(root);
   const fd = fs.openSync(path.join(root, "large-cache"), "w");
   fs.ftruncateSync(fd, SNAPSHOT_LIMITS.bytes + 1); fs.closeSync(fd);
-  const { runTrackedJob } = await import("../plugins/codex/scripts/lib/tracked-jobs.mjs");
+  const { runTrackedJob } = await import("../plugins/droid/scripts/lib/tracked-jobs.mjs");
   t.after(() => {
     const pid = readJobFile(resolveJobFile(root, "optional")).watchdogPid;
     if (pid) { try { process.kill(pid); } catch {} }
@@ -90,7 +90,7 @@ test("optional snapshot budget failure is visible without preventing a read-only
 test("a final worktree snapshot over budget fails the published completion", async (t) => {
   const root = makeTempDir(); initGitRepo(root);
   const resultFile = path.join(makeTempDir(), "result.json");
-  const { runTrackedJob } = await import("../plugins/codex/scripts/lib/tracked-jobs.mjs");
+  const { runTrackedJob } = await import("../plugins/droid/scripts/lib/tracked-jobs.mjs");
   t.after(() => {
     const pid = readJobFile(resolveJobFile(root, "final-budget")).watchdogPid;
     if (pid) { try { process.kill(pid); } catch {} }

@@ -5,9 +5,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { makeTempDir, initGitRepo, run } from "./helpers.mjs";
-import { writeJobFile, upsertJob } from "../plugins/codex/scripts/lib/state.mjs";
+import { writeJobFile, upsertJob } from "../plugins/droid/scripts/lib/state.mjs";
 
-const script = fileURLToPath(new URL("../plugins/codex/scripts/codex-companion.mjs", import.meta.url));
+const script = fileURLToPath(new URL("../plugins/droid/scripts/droid-companion.mjs", import.meta.url));
 
 test("status wait resolves a linked-worktree name once and polls that job until completion", async () => {
   const cwd = makeTempDir(), linked = makeTempDir(), bin = makeTempDir();
