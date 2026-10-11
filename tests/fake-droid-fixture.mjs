@@ -53,10 +53,14 @@ else payload = taskPayload(prompt, resume);
 if (BEHAVIOR === "invalid-json" || (BEHAVIOR === "repair-once" && !prompt.startsWith("Your previous answer"))) payload = "not valid json";
 if (BEHAVIOR === "repair-once" && prompt.startsWith("Your previous answer")) payload = '{"count":2}';
 const finish = () => {
+  if (BEHAVIOR === "warning-success") notify({ type: "error", message: "Temporary model error" });
+  if (BEHAVIOR === "blank-lines") console.log("  ");
   notify({ type: "assistant_text_delta", messageId: "answer", blockIndex: 0, textDelta: payload.slice(0, 7) });
   notify({ type: "assistant_text_delta", messageId: "answer", blockIndex: 0, textDelta: payload.slice(7) });
   notify({ type: "assistant_text_complete", messageId: "answer", blockIndex: 0 });
+  if (BEHAVIOR === "text-then-hang") return;
   notify({ type: "agent_turn_completed", reason: "completed", turnId, tokenUsage: { inputTokens: 10, outputTokens: 2 } });
+  if (BEHAVIOR === "trailing-prose") console.log("late diagnostic");
 };
 if (BEHAVIOR === "interruptible-slow-task") setTimeout(finish, 5000);
 else if (BEHAVIOR === "slow-task") setTimeout(finish, 400);

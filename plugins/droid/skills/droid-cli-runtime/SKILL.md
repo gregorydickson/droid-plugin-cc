@@ -40,4 +40,6 @@ Safety rules:
 - Return the stdout of the `task` command exactly as-is.
 - If the Bash call fails or Droid cannot be invoked, report the error in one line.
 
-Runtime mapping: read-only jobs omit `--auto` and restrict tools to `Read,LS,Grep,Glob`. `--write` maps to `droid exec --auto medium`, which permits local development operations beyond file edits. `--model` maps to `-m`, `--effort` maps to `-r`; model IDs pass through without aliases. `--resume-last` uses the session ID stored with the previous job as `--session-id`. No settings files are changed. Each job owns one process group; cancellation terminates that group.
+Runtime mapping: read-only jobs omit `--auto` and restrict tools to `Read,LS,Grep,Glob,Execute`. `--write` maps to `droid exec --auto medium`, which permits local development operations beyond file edits. `--model` maps to `-m`, `--effort` maps to `-r`; model IDs pass through without aliases. `--resume-last` uses the session ID stored with the previous job as `--session-id`. No settings files are changed. Each job owns one process group; cancellation terminates that group.
+
+Verified on Droid 0.238.0: without `--auto`, read-only autonomy allows `git log` and `git show HEAD:a.txt` through Execute. `touch b.txt` aborts the whole run with "Exec ended early: insufficient permission to proceed" and writes nothing. Repair turns use this same fence. `--auto medium` is an autonomy policy, not a filesystem sandbox; fence writes in the forwarded prompt and check changedFiles.

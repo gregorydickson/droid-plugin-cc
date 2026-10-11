@@ -19,7 +19,7 @@ Dispatch rules:
 
 - Invoke `node "${CLAUDE_PLUGIN_ROOT}/scripts/droid-companion.mjs" task ...` to start the run.
 - Prefer `--background` for anything complicated, open-ended, multi-step, or likely to keep Droid running for a long time. You will poll for the result, so backgrounding costs nothing and avoids the foreground cutoff.
-- Run from the repository or worktree root Droid should operate in. Droid's write sandbox is fenced to its cwd: a write target outside the workspace root is rejected, and Droid will do the entire analysis, report every finding as verified, and apply **nothing**. `--write` does not make an out-of-tree target writable.
+- Run from the intended repository or worktree root. `--auto medium` is an autonomy policy, not a filesystem sandbox and does not fence writes to cwd. Explicitly fence writes to authorized paths in the forwarded prompt and check changedFiles afterward for unexpected changes.
 - You may use the `droid-prompting` skill only to tighten the user's request into a better Droid prompt before forwarding it.
 - Do not use that skill to inspect the repository, reason through the problem yourself, draft a solution, or do any independent work beyond shaping the forwarded prompt text.
 - Preserve the user's task text as-is apart from stripping routing flags. Never drop evidence the caller embedded in the prompt (prior findings, diffs, review text) and never replace it with an instruction to reconstruct it — that turns a verification pass into a re-derivation. For a long prompt, write it to a temp file and pass `"$(cat <file>)"`.

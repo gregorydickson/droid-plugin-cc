@@ -24,7 +24,7 @@ test("Droid streams progress, returns usage, maps controls, and resumes its sess
   assert.ok(progress.some(event => event.threadId === first.threadId));
   const initialArgs = state().threadRequests[0].args;
   assert.ok(!initialArgs.includes("--auto"));
-  assert.equal(initialArgs[initialArgs.indexOf("--only-tools") + 1], "Read,LS,Grep,Glob");
+  assert.equal(initialArgs[initialArgs.indexOf("--only-tools") + 1], "Read,LS,Grep,Glob,Execute");
   assert.equal(initialArgs[initialArgs.indexOf("-m") + 1], "factory-model");
   assert.equal(initialArgs[initialArgs.indexOf("-r") + 1], "max");
   const resumed = await runDroidTurn(makeTempDir(), { prompt: "Continue", resumeThreadId: first.threadId, sandbox: "workspace-write" });
@@ -41,6 +41,7 @@ test("schema repair resumes once read-only and includes both turns' usage", asyn
   const requests = state().threadRequests;
   assert.deepEqual(requests.map(r => r.threadId), [result.threadId, result.threadId]);
   assert.ok(!requests[1].args.includes("--auto"));
+  assert.equal(requests[1].args[requests[1].args.indexOf("--only-tools") + 1], "Read,LS,Grep,Glob,Execute");
 });
 test("invalid output after one repair retains raw text and fails", async t => {
   const state = fixture(t, "invalid-json");
@@ -78,10 +79,52 @@ test("pause schema rejects unsafe reference scopes and preserves literal data wi
   assert.deepEqual(buildPauseOutputSchema(schema).properties.result.anyOf[0], schema);
 });
 
-const collaboration = (receivers, threadId = "thread", turnId = "turn") => ({ method: "item/completed", params: { threadId, turnId, item: { type: "collabAgentToolCall", id: `spawn-${receivers.join("-")}`, tool: "spawnAgent", status: "completed", receiverThreadIds: receivers } } });
-const childStarted = id => ({ method: "turn/started", params: { threadId: id, turn: { id: `turn-${id}`, status: "inProgress" } } });
-const childResult = id => ({ method: "item/completed", params: { threadId: id, turnId: `turn-${id}`, item: { type: "agentMessage", text: `result-${id}`, phase: "final_answer" } } });
-const childCompleted = id => ({ method: "turn/completed", params: { threadId: id, turn: { id: `turn-${id}`, status: "completed" } } });
-function completedPair() {
-  return [collaboration(["a", "b"]), childStarted("a"), childResult("a"), childCompleted("a"), childStarted("b"), childResult("b"), childCompleted("b")];
+test("progress emits assembled messages and callback failures do not abort the turn", async t => {
+  fixture(t);
+  const output = [];
+  const result = await runDroidTurn(makeTempDir(), { prompt: "Count", onProgress(event) {
+    if (event.logBody) output.push(event.logBody);
+    throw new Error("lock timeout");
+  } });
+  assert.equal(result.status, 0);
+  assert.deepEqual(output, ['{"count":2}']);
+  assert.ok(result.warnings.some(w => /lock timeout/.test(w.message)));
+});
+test("a completed assistant message is reported before the turn ends", async t => {
+  fixture(t, "text-then-hang");
+  const output = [];
+  const result = await runDroidTurn(makeTempDir(), { prompt: "Count", timeoutMs: 1500, onProgress(event) {
+    if (event.logBody) output.push(event.logBody);
+  } });
+  assert.notEqual(result.status, 0);
+  assert.deepEqual(output, ['{"count":2}']);
+});
+for (const behavior of ["warning-success", "blank-lines", "trailing-prose"]) {
+  test(`terminal success tolerates ${behavior}`, async t => {
+    fixture(t, behavior);
+    const result = await runDroidTurn(makeTempDir(), { prompt: "Count" });
+    assert.equal(result.status, 0);
+    assert.equal(result.finalMessage, '{"count":2}');
+    if (behavior === "warning-success") assert.ok(result.warnings.some(w => w.message === "Temporary model error"));
+  });
 }
+
+test("turn timeout is opt-in", async t => {
+  fixture(t, "slow-task");
+  const original = globalThis.setTimeout;
+  const delays = [];
+  t.mock.method(globalThis, "setTimeout", (fn, delay, ...args) => { delays.push(delay); return original(fn, delay, ...args); });
+  assert.equal((await runDroidTurn(makeTempDir(), { prompt: "Count" })).status, 0);
+  assert.deepEqual(delays, []);
+  const timed = await runDroidTurn(makeTempDir(), { prompt: "Count", timeoutMs: 10 });
+  assert.equal(timed.status, 1);
+  assert.match(timed.error.message, /timed out/);
+  assert.deepEqual(delays, [10]);
+});
+
+test("asynchronous progress rejection remains a warning", async t => {
+  fixture(t);
+  const result = await runDroidTurn(makeTempDir(), { prompt: "Count", onProgress: async () => { throw new Error("async lock timeout"); } });
+  assert.equal(result.status, 0);
+  assert.ok(result.warnings.some(w => /async lock timeout/.test(w.message)));
+});

@@ -22,7 +22,6 @@ import {
   } from "./lib/droid.mjs";
 import { resolveRuntimeOptions } from "./lib/runtime-options.mjs";
 import { withFileLockSync } from "./lib/file-lock.mjs";
-import { startWorkerControl, sendWorkerMessage } from "./lib/worker-control.mjs";
 import { readWorkerContext, STOP_REPORT_INSTRUCTIONS, fieldDisagreements } from "./lib/worker-context.mjs";
 import { resultEnvelope, validateOutputSchema } from "./lib/job-results.mjs";
 import { validateWorktree } from "./lib/worktree-jobs.mjs";
@@ -136,7 +135,7 @@ function normalizeReasoningEffort(effort) {
   }
   if (!VALID_REASONING_EFFORTS.has(normalized)) {
     throw new Error(
-      `Unsupported reasoning effort "${effort}". Use one of: none, minimal, low, medium, high, xhigh.`
+      `Unsupported reasoning effort "${effort}". Use one of: ${[...VALID_REASONING_EFFORTS].join(", ")}.`
     );
   }
   return normalized;
@@ -378,7 +377,7 @@ async function executeReviewRun(request) {
   const reviewName = request.reviewName ?? "Review";
   if (reviewName === "Review") {
     validateNativeReviewRequest(target, focusText);
-    const context = collectReviewContext(request.cwd, target, { includeDiff: true });
+    const context = collectReviewContext(request.cwd, target);
     const result = await runDroidTurn(request.cwd, {
       ...request, sandbox: "read-only",
       prompt: `Review code changes for correctness, regressions, security, and missing tests. Report actionable findings with file/line references, or explicitly say no material issues were found. Do not modify files.\nTarget: ${target.label}\n${context.collectionGuidance}\n${context.content}`
@@ -422,7 +421,7 @@ async function executeReviewRun(request) {
     };
   }
 
-  const context = collectReviewContext(request.cwd, target, { includeDiff: true });
+  const context = collectReviewContext(request.cwd, target);
   const prompt = [buildAdversarialReviewPrompt(context, focusText), request.briefText, request.inputContext].filter(Boolean).join("\n\n");
   const result = await runDroidTurn(context.repoRoot, {
     ...request,
@@ -501,9 +500,7 @@ async function executeTaskRun(request) {
     throw new Error("Provide a prompt, a prompt file, piped stdin, or use --resume-last.");
   }
 
-  const control = request.jobId ? startWorkerControl(workspaceRoot, request.jobId) : null;
-  let result;
-  try { result = await runDroidTurn(workspaceRoot, {
+  const result = await runDroidTurn(workspaceRoot, {
     ...request,
     resumeThreadId,
     prompt: request.prompt,
@@ -512,10 +509,9 @@ async function executeTaskRun(request) {
     effort: request.effort,
     sandbox: request.sandbox ?? (request.write ? "workspace-write" : "read-only"),
     onProgress: request.onProgress,
-    onActiveTurn: control?.onActiveTurn,
     persistThread: true,
     threadName: resumeThreadId ? null : request.name ?? buildPersistentTaskThreadName(request.prompt || DEFAULT_CONTINUE_PROMPT)
-  }); } finally { control?.close(); }
+  });
 
   const rawOutput = typeof result.finalMessage === "string" ? result.finalMessage : "";
   const failureMessage = result.error?.message ?? result.stderr ?? "";
@@ -836,8 +832,6 @@ function absoluteWorkerArgs(cwd, options) {
 async function prepareWorkerOptions(cwd, options) {
   const runtime = await resolveRuntimeOptions(cwd, { mcpConfig: options["mcp-config"], profile: options.profile, write: Boolean(options.write), ...(options.fanout != null ? { fanout: options.fanout } : {}) });
   const context = readWorkerContext(cwd, options);
-  const fanout = options.fanout == null ? null : Number(options.fanout);
-  if (fanout !== null && (!Number.isInteger(fanout) || fanout < 1 || fanout > 16)) throw new Error("--fanout must be an integer from 1 to 16.");
   if (options["lock-cmd"] && !options["unlock-cmd"]) throw new Error("--lock-cmd requires --unlock-cmd.");
   const outputSchema = options["output-schema"] ? readOutputSchema(path.resolve(cwd, options["output-schema"])) : null;
   if (options["output-schema"]) validateOutputSchema(outputSchema);
@@ -856,7 +850,6 @@ async function prepareWorkerOptions(cwd, options) {
     worktree: options.worktree ? cwd : null,
     lockCmd: options["lock-cmd"] ?? null,
     unlockCmd: options["unlock-cmd"] ?? null,
-    fanout,
     structured: [...WORKER_VALUE_OPTIONS, ...WORKER_BOOLEAN_OPTIONS].some(key => options[key] != null)
   };
 }
@@ -1231,17 +1224,8 @@ async function handleAnswer(argv) {
   return resumeSession(job, `Answer to your stop report:\n${answer}\nContinue the original brief on this thread.`, { ...options, answering: true, structured: true });
 }
 
-async function handleSend(argv) {
-  const { options, positionals } = parseCommandInput(argv, { valueOptions: ["cwd"], booleanOptions: ["json"] });
-  const cwd = resolveCommandCwd(options);
-  const [reference, ...words] = positionals;
-  const job = selectedSession(cwd, reference);
-  if (job.status !== "running") throw new Error("Messages require a running job.");
-  const message = words.join(" ").trim();
-  if (!message) throw new Error("Provide a message.");
-  const result = await sendWorkerMessage(job.workspaceRoot, job.id, message);
-  outputCommandResult(result, result.accepted ? "Message accepted.\n" : `Message rejected: ${result.error}\n`, options.json);
-  if (!result.accepted) process.exitCode = 1;
+async function handleSend() {
+  throw new Error("Live steering is unavailable for one-shot Droid jobs. Cancel or resume with another prompt.");
 }
 
 async function runComparisonPeer(command, cwd, input) {

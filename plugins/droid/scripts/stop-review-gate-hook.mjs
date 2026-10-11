@@ -6,6 +6,8 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
+import { createTempDir } from "./lib/fs.mjs";
+import { runCommand } from "./lib/process.mjs";
 import { collectReviewContext, resolveReviewTarget } from "./lib/git.mjs";
 import { getDroidAvailability } from "./lib/droid.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
@@ -19,8 +21,11 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(SCRIPT_DIR, "..");
 const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude turn.";
 
-function readHookInput() {
-  const raw = fs.readFileSync(0, "utf8").trim();
+async function readHookInput() {
+  process.stdin.setEncoding("utf8");
+  let input = "";
+  for await (const chunk of process.stdin) input += chunk;
+  const raw = input.trim();
   if (!raw) {
     return {};
   }
@@ -99,18 +104,26 @@ function parseStopReviewOutput(rawOutput) {
 function runStopReview(cwd, input = {}) {
   const scriptPath = path.join(SCRIPT_DIR, "droid-companion.mjs");
   let prompt = buildStopReviewPrompt(input);
+  if (runCommand("git", ["rev-parse", "--git-dir"], { cwd }).status !== 0) return { ok: true };
   const target = resolveReviewTarget(cwd, { scope: "working-tree" });
-  prompt += `\n\nCurrent repository diff (may include earlier turns; attribute findings carefully):\n${collectReviewContext(cwd, target, { includeDiff: true }).content}`;
+  const context = collectReviewContext(cwd, target);
+  prompt += `\n\nCurrent repository context (may include earlier turns; attribute findings carefully):\n${context.collectionGuidance}\n${context.content}`;
   const childEnv = {
     ...process.env,
     ...(input.session_id ? { [SESSION_ID_ENV]: input.session_id } : {})
   };
-  const result = spawnSync(process.execPath, [scriptPath, "task", "--json", prompt], {
-    cwd,
-    env: childEnv,
-    encoding: "utf8",
-    timeout: STOP_REVIEW_TIMEOUT_MS
-  });
+  const dir = createTempDir("droid-stop-");
+  const promptFile = path.join(dir, "prompt.txt");
+  let result;
+  try {
+    fs.writeFileSync(promptFile, prompt, { mode: 0o600 });
+    result = spawnSync(process.execPath, [scriptPath, "task", "--json", "--prompt-file", promptFile], {
+      cwd,
+      env: childEnv,
+      encoding: "utf8",
+      timeout: STOP_REVIEW_TIMEOUT_MS
+    });
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 
   if (result.error?.code === "ETIMEDOUT") {
     return {
@@ -142,8 +155,8 @@ function runStopReview(cwd, input = {}) {
   }
 }
 
-function main() {
-  const input = readHookInput();
+async function main() {
+  const input = await readHookInput();
   const cwd = input.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const config = getConfig(workspaceRoot);
@@ -179,7 +192,7 @@ function main() {
 }
 
 try {
-  main();
+  await main();
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
   process.stderr.write(`${message}\n`);

@@ -86,6 +86,9 @@ for (const behavior of ["review-ok", "invalid-claim-verdict"]) {
     fs.writeFileSync(path.join(cwd, "claims.json"), JSON.stringify([claim]));
     const result = command("verify-claims", "claims.json");
     const request = JSON.parse(fs.readFileSync(path.join(bin, "fake-droid-state.json"))).turns[0];
+    const args = JSON.parse(fs.readFileSync(path.join(bin, "fake-droid-state.json"))).threadRequests[0].args;
+    assert.equal(args[args.indexOf("--only-tools") + 1], "Read,LS,Grep,Glob,Execute");
+    assert.ok(!args.includes("--auto"));
     assert.match(request.prompt, new RegExp(`only against commit ${sha}`));
     assert.deepEqual(JSON.parse(request.prompt.slice(request.prompt.indexOf('\n{"claim"') + 1).split("\n\nReturn only JSON")[0]), { claim, source: "pinned evidence\n" });
     assert.ok(!request.prompt.includes("uncommitted conflicting"));

@@ -1,10 +1,9 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import { readJsonFile } from "./fs.mjs";
-import { binaryAvailable, terminateProcessTree } from "./process.mjs";
+import { createTempDir, readJsonFile } from "./fs.mjs";
+import { binaryAvailable, runCommand, terminateProcessTree } from "./process.mjs";
 import { validateOutputSchema } from "./job-results.mjs";
 
 export const DEFAULT_CONTINUE_PROMPT = "Continue from the current thread state. Pick the next highest-value step and follow through until the task is resolved.";
@@ -25,19 +24,22 @@ export async function getDroidAuthStatus(cwd) {
   const availability = getDroidAvailability(cwd);
   return { available: availability.available, loggedIn: null, verified: false, source: "exec", detail: "Authentication is checked on the first run. Use /login in Droid or FACTORY_API_KEY.", provider: "Factory" };
 }
-export function interruptDroidTurn(cwd, { turnId }) {
-  const pid = /^pid:(\d+)$/.exec(turnId ?? "")?.[1];
-  if (!pid) return { attempted: false, interrupted: false, transport: "process", detail: "No active child PID." };
-  if (process.platform === "win32") {
-    const result = terminateProcessTree(Number(pid));
-    return { attempted: result.attempted, interrupted: result.delivered, transport: "process" };
-  }
+/** Stored turn IDs include the process birth time and group; legacy PIDs are untrusted. */
+function processIdentity(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  const result = runCommand("ps", ["-p", String(pid), "-o", "lstart=", "-o", "pgid="], { shell: false });
+  const identity = result.stdout.trim();
+  return !result.error && result.status === 0 && identity ? Buffer.from(identity).toString("base64url") : null;
+}
+export function interruptDroidTurn(cwd, options = {}) {
   try {
-    process.kill(-Number(pid), "SIGKILL");
-    return { attempted: true, interrupted: true, transport: "process-group" };
+    const turnId = options?.turnId;
+    const match = /^pid:(\d+):([\w-]+)$/.exec(turnId ?? "");
+    if (!match || processIdentity(Number(match[1])) !== match[2]) return { attempted: false, interrupted: false, transport: "process", detail: "No verified active child." };
+    const result = terminateProcessTree(Number(match[1]), { signal: "SIGKILL" });
+    return { attempted: result.attempted, interrupted: result.delivered, transport: result.method };
   } catch (error) {
-    if (error.code !== "ESRCH") throw error;
-    return { attempted: true, interrupted: false, transport: "process-group" };
+    return { attempted: true, interrupted: false, transport: "process", detail: error.message };
   }
 }
 export async function findLatestTaskThread() { return null; }
@@ -47,17 +49,24 @@ export async function importExternalAgentSession() {
 }
 export function readOutputSchema(file) { return readJsonFile(file); }
 export function parseStructuredOutput(rawOutput, fallback = {}) {
-  try { return { ...fallback, parsed: JSON.parse(rawOutput), parseError: null, rawOutput }; }
-  catch (error) { return { ...fallback, parsed: null, parseError: error.message, rawOutput: rawOutput ?? "" }; }
+  if (!rawOutput) return { parsed: null, parseError: fallback.failureMessage ?? "Droid did not return a final structured message.", rawOutput: rawOutput ?? "", ...fallback };
+  try { return { parsed: JSON.parse(rawOutput), parseError: null, rawOutput, ...fallback }; }
+  catch (error) { return { parsed: null, parseError: error.message, rawOutput, ...fallback }; }
 }
-export function isQuotaError(error) { return /quota|usage limit exceeded|insufficient_quota/i.test(error?.message ?? ""); }
-export function createQuotaError(error) { return Object.assign(new Error(error.message), { code: "quota_exhausted", exitCode: 75 }); }
+export function isQuotaError(error) {
+  return ["quota_exhausted", "insufficient_quota"].includes(error?.code) || /\b(insufficient_quota|quota exhausted|usage limit exceeded)\b/i.test(error?.message ?? "");
+}
+export function createQuotaError(source) {
+  return Object.assign(new Error(source?.message ?? "Droid quota exhausted."), {
+    code: "quota_exhausted", error: "quota_exhausted", exitCode: 75,
+    retryAfter: source?.retryAfter ?? source?.data?.retryAfter ?? null
+  });
+}
 
 /** One child per turn. stdout is newline-delimited Factory JSON-RPC, never prose. */
 export async function runDroidTurn(cwd, options = {}) {
   let prompt = options.prompt?.trim() || options.defaultPrompt || "";
   if (!prompt) throw new Error("A prompt is required for this Droid run.");
-  if (options.fanout || options.config) throw new Error("Provider config and fanout are unsupported by this Droid adapter.");
   const schema = options.pauseAndAsk && options.outputSchema != null ? buildPauseOutputSchema(options.outputSchema) : options.outputSchema;
   const validate = schema != null ? validateOutputSchema(schema) : null;
   if (schema != null) prompt += `\n\nReturn only JSON matching this JSON schema (no Markdown fences):\n${JSON.stringify(schema)}`;
@@ -86,58 +95,81 @@ export async function runDroidTurn(cwd, options = {}) {
 
 function executeTurn(cwd, options) {
   return new Promise((resolve, reject) => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "droid-prompt-"));
+    const dir = createTempDir("droid-prompt-");
     const file = path.join(dir, "prompt.txt");
     fs.writeFileSync(file, options.prompt, { mode: 0o600 });
     const args = ["exec", "--output-format", "stream-jsonrpc", "--cwd", cwd, "-f", file];
     const write = options.sandbox === "workspace-write" && !options.repair;
     if (write) args.push("--auto", "medium");
-    else args.push("--only-tools", "Read,LS,Grep,Glob");
+    else args.push("--only-tools", "Read,LS,Grep,Glob,Execute");
     if (options.model) args.push("-m", options.model);
     if (options.effort) args.push("-r", options.effort);
     if (options.resumeThreadId) args.push("--session-id", options.resumeThreadId);
     const { command, prefix } = invocation(options.env ?? process.env);
-    const child = spawn(command, [...prefix, ...args], { cwd, env: options.env ?? process.env, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    const child = spawn(command, [...prefix, ...args], { cwd, env: options.env ?? process.env, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"], windowsHide: true, shell: process.platform === "win32" });
     const messages = new Map();
     let threadId = null, completed = false, error = null, usage = null, stderr = "";
-    const turnId = `pid:${child.pid}`;
-    const progress = (message, extra = {}) => options.onProgress?.({ message, phase: "running", threadId, turnId, ...extra });
-    const stop = () => { try { interruptDroidTurn(cwd, { turnId }); } catch {} };
+    const turnId = `pid:${child.pid}:${processIdentity(child.pid) ?? "unverified"}`;
+    const warnings = [];
+    const emitted = new Set();
+    let terminalReason = null;
+    const warn = message => { warnings.push({ message }); process.stderr.write(`${message}\n`); };
+    const progress = (message, extra = {}) => {
+      try {
+        const pending = options.onProgress?.({ message, phase: "running", threadId, turnId, ...extra });
+        pending?.catch?.(err => warn(`Droid progress callback failed: ${err.message}`));
+      } catch (err) { warn(`Droid progress callback failed: ${err.message}`); }
+    };
+    const emitMessage = id => {
+      if (emitted.has(id) || !messages.has(id)) return;
+      const text = [...messages.get(id).entries()].sort((a, b) => a[0] - b[0]).map(([, text]) => text).join("");
+      emitted.add(id);
+      progress(text, { logTitle: "Droid output", logBody: text });
+    };
+    const stop = () => { try { terminateProcessTree(child.pid, { signal: "SIGKILL" }); } catch {} };
     const onSignal = () => stop();
     process.on("SIGTERM", onSignal);
     process.on("SIGINT", onSignal);
-    const timeout = setTimeout(() => { error = { message: "Droid run timed out." }; stop(); }, options.timeoutMs ?? 60 * 60 * 1000);
+    const timeout = options.timeoutMs == null ? null : setTimeout(() => { error = { message: "Droid run timed out." }; stop(); }, options.timeoutMs);
     child.stderr.on("data", data => { stderr = (stderr + data).slice(-65536); });
     child.on("error", err => { error = { message: err.message }; });
     const lines = createInterface({ input: child.stdout });
     lines.on("line", line => {
+      if (!line.trim()) return;
       try {
         const event = JSON.parse(line);
         if (event.jsonrpc !== "2.0") throw new Error("Expected Factory JSON-RPC output.");
-        if (event.error) error = event.error;
+        if (event.error) warnings.push(event.error);
         if (event.result?.sessionId) { threadId = event.result.sessionId; progress(`Session ready (${threadId}).`, { phase: "starting" }); }
         if (event.method !== "droid.session_notification") return;
         if (event.params?.sessionId && threadId && event.params.sessionId !== threadId) return;
         const n = event.params?.notification;
         if (!n) return;
-        if (n.type === "error") error = { message: n.message };
+        if (n.type === "error") warnings.push(n);
         if (n.type === "assistant_text_delta") {
           const blocks = messages.get(n.messageId) ?? new Map();
           blocks.set(n.blockIndex, (blocks.get(n.blockIndex) ?? "") + n.textDelta);
           messages.set(n.messageId, blocks);
-          progress(n.textDelta, { logTitle: "Droid output", logBody: n.textDelta });
         }
         if (n.type === "create_message" && n.message?.role === "assistant") {
           const blocks = new Map((n.message.content ?? []).flatMap((block, index) => block.type === "text" ? [[index, block.text]] : []));
           if (blocks.size) messages.set(n.message.id, blocks);
         }
+        if (n.type === "assistant_text_complete") emitMessage(n.messageId);
         if (n.type === "assistant_message_retracted") messages.delete(n.messageId);
-        if (n.type === "tool_call") progress(`Running tool: ${n.toolUse?.name ?? "tool"}`);
-        if (n.type === "agent_turn_completed") {
-          completed = true; usage = n.tokenUsage ?? null;
-          if (n.reason !== "completed") error ??= { message: `Droid turn ended: ${n.reason}` };
+        if (n.type === "tool_call") {
+          for (const id of messages.keys()) emitMessage(id);
+          progress(`Running tool: ${n.toolUse?.name ?? "tool"}`);
         }
-      } catch (err) { error = { message: `Invalid Droid protocol: ${err.message}` }; stop(); }
+        if (n.type === "agent_turn_completed") {
+          completed = true; terminalReason = n.reason; usage = n.tokenUsage ?? null;
+          for (const id of messages.keys()) emitMessage(id);
+          if (n.reason !== "completed") error ??= warnings.at(-1) ?? { message: `Droid turn ended: ${n.reason}` };
+        }
+      } catch (err) {
+        if (completed) warn(`Droid stdout after completion: ${line}`);
+        else { error = { message: `Invalid Droid protocol: ${err.message}` }; stop(); }
+      }
     });
     child.on("exit", stop);
     child.on("close", code => {
@@ -145,12 +177,13 @@ function executeTurn(cwd, options) {
       fs.rmSync(dir, { recursive: true, force: true });
       const last = [...messages.values()].at(-1);
       const finalMessage = last ? [...last.entries()].sort((a, b) => a[0] - b[0]).map(([, text]) => text).join("") : "";
+      if (!completed || code !== 0) error ??= warnings.at(-1);
       if (!finalMessage.trim()) error ??= { message: stderr.trim() || "Droid returned no final assistant message." };
       if (!completed) error ??= { message: stderr.trim() || "Droid exited without a turn completion event." };
       if (!threadId) error ??= { message: "Droid returned no session ID." };
       if (isQuotaError(error)) { reject(createQuotaError(error)); return; }
-      resolve({ status: code === 0 && !error ? 0 : 1, threadId, turnId, finalMessage, usage,
-        error, stderr, reasoningSummary: [], touchedFiles: [], fileChanges: [], commandExecutions: [], children: [] });
+      resolve({ status: code === 0 && terminalReason === "completed" && !error ? 0 : 1, threadId, turnId, finalMessage, usage,
+        error, warnings, stderr, reasoningSummary: [], touchedFiles: [], fileChanges: [], commandExecutions: [], children: [] });
     });
     try {
       // Persist the child group before initialization, so early cancellation works.

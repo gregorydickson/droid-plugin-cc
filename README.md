@@ -37,7 +37,7 @@ Rescue supports `--background`, `--wait`, `--fresh`, `--model ID`, and `--effort
 
 The companion starts `droid exec --output-format stream-jsonrpc` once per job. It reads structured progress and completion events and stores the returned session ID. There is no shared broker. The session history belongs to Droid; job records and rendered results belong to the plugin.
 
-Read-only calls omit `--auto` and explicitly allow only `Read,LS,Grep,Glob`. This prevents tool-driven edits and shell execution even if local defaults change. `--write` maps to `--auto medium`: local development operations, including package installs and local git operations, may be allowed. This is an autonomy policy, not an OS filesystem sandbox. The plugin never passes `--skip-permissions-unsafe`.
+Read-only calls omit `--auto` and explicitly allow only `Read,LS,Grep,Glob,Execute`. On Droid 0.238.0, no `--auto` runs at read-only autonomy: read-only shell commands work, while a write command aborts the whole run without writing. `--write` maps to `--auto medium`: local development operations, including package installs and local git operations, may be allowed. This is an autonomy policy, not an OS filesystem sandbox. The plugin never passes `--skip-permissions-unsafe`.
 
 `--model` maps to `-m`, and `--effort` to `-r`; Factory validates model support. Resume passes the stored session ID with `--session-id`. Cancellation terminates the child's process group and publishes a cancelled job. SessionEnd cancels ephemeral jobs belonging to that Claude session; named or persistent jobs survive.
 

@@ -169,7 +169,7 @@ test("adversarial review accepts the same base-branch targeting as review", () =
   assert.match(result.stdout, /Missing empty-state guard/);
 });
 
-test("adversarial review supplies larger diffs without shell tools", () => {
+test("adversarial review self-collects larger diffs with read-only shell tools", () => {
   const repo = makeTempDir();
   const binDir = makeTempDir();
   installFakeDroid(binDir);
@@ -191,8 +191,8 @@ test("adversarial review supplies larger diffs without shell tools", () => {
 
   assert.equal(result.status, 0, result.stderr);
   const state = JSON.parse(fs.readFileSync(path.join(binDir, "fake-droid-state.json"), "utf8"));
-  assert.match(state.lastTurnStart.prompt, /primary evidence/i);
-  for (const marker of ["A", "B", "C"]) assert.ok(state.lastTurnStart.prompt.includes(`PROMPT_SELF_COLLECT_${marker}`));
+  assert.match(state.lastTurnStart.prompt, /Inspect the target diff yourself with read-only git commands/i);
+  for (const marker of ["A", "B", "C"]) assert.ok(!state.lastTurnStart.prompt.includes(`PROMPT_SELF_COLLECT_${marker}`));
 });
 
 test("task --resume-last resumes the latest persisted task thread", () => {
