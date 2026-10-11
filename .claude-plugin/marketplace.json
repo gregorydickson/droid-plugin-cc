@@ -4,14 +4,14 @@
     "name": "gregorydickson"
   },
   "metadata": {
-    "version": "0.1.0",
+    "version": "0.1.1",
     "description": "Droid for Claude Code: reviews and durable delegated jobs."
   },
   "plugins": [
     {
       "name": "droid",
       "description": "Use Droid from Claude Code to review code or delegate tasks.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "author": {
         "name": "gregorydickson"
       },

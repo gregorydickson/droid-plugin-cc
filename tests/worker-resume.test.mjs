@@ -195,3 +195,41 @@ test("a session recorded before worker arguments were kept resumes from its stor
   assert.equal(readStoredJob(ctx.linked, resumed.jobId).resultFile, null);
   assert.equal(JSON.parse(fs.readFileSync(first, "utf8")).jobId, original.jobId);
 });
+
+// droid 0.238.0 rejects --session-id (and --fork) on a one-shot stream-jsonrpc
+// exec; a continued turn must stream stream-json instead.
+function assertExecArgv(entry, threadId) {
+  const { args } = entry;
+  const format = args[args.indexOf("--output-format") + 1];
+  const oneShotRpc = format === "stream-jsonrpc" && !args.includes("--input-format");
+  assert.ok(!(oneShotRpc && (args.includes("--session-id") || args.includes("--fork"))), `invalid droid argv: ${args.join(" ")}`);
+  if (entry.method === "start") {
+    assert.equal(format, "stream-jsonrpc");
+    assert.ok(!args.includes("--session-id"));
+  } else {
+    assert.equal(format, "stream-json");
+    assert.equal(args[args.indexOf("--session-id") + 1], threadId);
+  }
+}
+
+test("a named task, its sessions resume, and an answer each build a droid argv the CLI accepts", () => {
+  const named = setup();
+  const original = named.start();
+  assert.equal(original.status, "completed");
+  const resumed = named.cli("sessions", "resume", "slice-one", "Next slice", "--background");
+  named.cli("status", resumed.jobId, "--wait");
+  assert.equal(named.cli("result", resumed.jobId).status, "completed");
+  const namedRequests = named.fake().threadRequests;
+  assert.deepEqual(namedRequests.map(entry => entry.method), ["start", "resume"]);
+  for (const entry of namedRequests) assertExecArgv(entry, original.threadId);
+
+  const asking = setup("NEED_ANSWER");
+  const paused = asking.start();
+  assert.equal(paused.status, "awaiting-answer");
+  const answered = asking.cli("answer", paused.jobId, "yes");
+  assert.equal(answered.status, "completed");
+  assert.equal(answered.threadId, paused.threadId);
+  const askingRequests = asking.fake().threadRequests;
+  assert.deepEqual(askingRequests.map(entry => entry.method), ["start", "resume"]);
+  for (const entry of askingRequests) assertExecArgv(entry, paused.threadId);
+});

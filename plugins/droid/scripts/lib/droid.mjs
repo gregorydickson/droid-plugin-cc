@@ -93,18 +93,37 @@ export async function runDroidTurn(cwd, options = {}) {
   return result;
 }
 
+/**
+ * droid refuses --session-id on a one-shot stream-jsonrpc exec, and a JSON-RPC
+ * input session ignores the CLI's --auto/-m/-r, which would drop the tool fence.
+ * So a fresh turn streams JSON-RPC and a continued turn (resume, answer, schema
+ * repair) streams stream-json, where the flags still apply.
+ */
+export function buildDroidExecArgs(cwd, file, options = {}) {
+  const resume = Boolean(options.resumeThreadId);
+  const args = ["exec", "--output-format", resume ? "stream-json" : "stream-jsonrpc", "--cwd", cwd, "-f", file];
+  if (options.sandbox === "workspace-write" && !options.repair) args.push("--auto", "medium");
+  else args.push("--only-tools", "Read,LS,Grep,Glob,Execute");
+  if (options.model) args.push("-m", options.model);
+  if (options.effort) args.push("-r", options.effort);
+  if (resume) args.push("--session-id", options.resumeThreadId);
+  return args;
+}
+
+function streamJsonUsage(usage) {
+  if (!usage) return null;
+  const keys = { input_tokens: "inputTokens", output_tokens: "outputTokens", cache_read_input_tokens: "cacheReadTokens",
+    cache_creation_input_tokens: "cacheCreationTokens", thinking_tokens: "thinkingTokens" };
+  return Object.fromEntries(Object.entries(keys).filter(([key]) => typeof usage[key] === "number").map(([key, name]) => [name, usage[key]]));
+}
+
 function executeTurn(cwd, options) {
   return new Promise((resolve, reject) => {
     const dir = createTempDir("droid-prompt-");
     const file = path.join(dir, "prompt.txt");
     fs.writeFileSync(file, options.prompt, { mode: 0o600 });
-    const args = ["exec", "--output-format", "stream-jsonrpc", "--cwd", cwd, "-f", file];
-    const write = options.sandbox === "workspace-write" && !options.repair;
-    if (write) args.push("--auto", "medium");
-    else args.push("--only-tools", "Read,LS,Grep,Glob,Execute");
-    if (options.model) args.push("-m", options.model);
-    if (options.effort) args.push("-r", options.effort);
-    if (options.resumeThreadId) args.push("--session-id", options.resumeThreadId);
+    const args = buildDroidExecArgs(cwd, file, options);
+    const streamJson = args[args.indexOf("--output-format") + 1] === "stream-json";
     const { command, prefix } = invocation(options.env ?? process.env);
     const child = spawn(command, [...prefix, ...args], { cwd, env: options.env ?? process.env, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"], windowsHide: true, shell: process.platform === "win32" });
     const messages = new Map();
@@ -138,6 +157,23 @@ function executeTurn(cwd, options) {
       if (!line.trim()) return;
       try {
         const event = JSON.parse(line);
+        if (streamJson) {
+          if (typeof event?.type !== "string") throw new Error("Expected Droid stream-json output.");
+          if (event.session_id && threadId && event.session_id !== threadId) return;
+          if (event.type === "system" && event.subtype === "init" && event.session_id) {
+            threadId = event.session_id; progress(`Session ready (${threadId}).`, { phase: "starting" });
+          }
+          if (event.type === "error") warnings.push({ message: event.message ?? event.error ?? JSON.stringify(event) });
+          if (event.type === "message" && event.role === "assistant" && typeof event.text === "string") {
+            messages.set(event.id, new Map([[0, event.text]])); emitMessage(event.id);
+          }
+          if (event.type === "tool_call") progress(`Running tool: ${event.toolName ?? event.toolId ?? "tool"}`);
+          if (event.type === "completion") {
+            completed = true; terminalReason = "completed"; usage = streamJsonUsage(event.usage);
+            if (typeof event.finalText === "string" && event.finalText.trim()) messages.set("completion", new Map([[0, event.finalText]]));
+          }
+          return;
+        }
         if (event.jsonrpc !== "2.0") throw new Error("Expected Factory JSON-RPC output.");
         if (event.error) warnings.push(event.error);
         if (event.result?.sessionId) { threadId = event.result.sessionId; progress(`Session ready (${threadId}).`, { phase: "starting" }); }

@@ -14,7 +14,15 @@ const WORKER = ${JSON.stringify(worker)};
 const args = process.argv.slice(2);
 const arg = flag => args[args.indexOf(flag) + 1];
 if (args[0] === "--version") { console.log("droid-cli test"); process.exit(0); }
-if (args[0] !== "exec" || arg("--output-format") !== "stream-jsonrpc") process.exit(2);
+const FORMAT = arg("--output-format");
+if (args[0] !== "exec" || !["stream-jsonrpc", "stream-json"].includes(FORMAT)) process.exit(2);
+// The real CLI's flag check (droid 0.238.0), so a bad argv fails here as it does live.
+if (FORMAT === "stream-jsonrpc" && arg("--input-format") !== "stream-jsonrpc") {
+  for (const flag of ["--session-id", "--fork"]) if (args.includes(flag)) {
+    process.stderr.write("Invalid flags: " + flag + " is not supported with one-shot --output-format stream-jsonrpc. Use --output-format stream-json, or drive the session with --input-format stream-jsonrpc.\\n");
+    process.exit(1);
+  }
+}
 const prompt = fs.readFileSync(arg("-f"), "utf8");
 const state = fs.existsSync(STATE_PATH) ? JSON.parse(fs.readFileSync(STATE_PATH)) : { threads: [], threadRequests: [], execStarts: 0 };
 state.execStarts++;
@@ -28,8 +36,20 @@ state.threadRequests.push({ method: resume ? "resume" : "start", threadId, cwd: 
 fs.writeFileSync(STATE_PATH, JSON.stringify(state));
 const envelope = { jsonrpc: "2.0", factoryApiVersion: "1.0.0", factoryProtocolVersion: "1.257.0" };
 const send = msg => process.stdout.write(JSON.stringify({ ...envelope, ...msg }) + "\\n");
-const notify = notification => send({ type: "notification", method: "droid.session_notification", params: { sessionId: threadId, notification } });
-send({ type: "response", id: "init", result: { sessionId: threadId } });
+const line = event => process.stdout.write(JSON.stringify({ ...event, session_id: threadId }) + "\\n");
+let streamText = "";
+// stream-json has no deltas or turn-completed notification: it emits the whole
+// assistant message, then one completion event with snake_case usage.
+const notify = FORMAT === "stream-jsonrpc"
+  ? notification => send({ type: "notification", method: "droid.session_notification", params: { sessionId: threadId, notification } })
+  : n => {
+    if (n.type === "error") line({ type: "error", message: n.message });
+    if (n.type === "assistant_text_delta") streamText += n.textDelta;
+    if (n.type === "assistant_text_complete") line({ type: "message", role: "assistant", id: n.messageId, text: streamText });
+    if (n.type === "agent_turn_completed") line({ type: "completion", finalText: streamText, numTurns: 1, usage: { input_tokens: n.tokenUsage.inputTokens, output_tokens: n.tokenUsage.outputTokens } });
+  };
+if (FORMAT === "stream-jsonrpc") send({ type: "response", id: "init", result: { sessionId: threadId } });
+else line({ type: "system", subtype: "init", cwd: process.cwd(), tools: [] });
 if (BEHAVIOR === "auth-run-fails") { notify({ type: "error", message: "Authentication failed: sign in to Droid" }); process.exit(1); }
 if (BEHAVIOR === "stubborn-task") {
   const child = require("node:child_process").spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: "ignore" });
