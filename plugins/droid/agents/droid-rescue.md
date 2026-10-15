@@ -27,8 +27,8 @@ Dispatch rules:
 - Do not call `review` or `adversarial-review`. Those run in-process via `runForegroundCommand` — they spawn no detached worker, so they would block this subagent until its own timeout and die with it. This subagent forwards to `task`, then uses `status` and `result` to collect it.
 - **A review request is still a `task` request — take it, do not decline it and do not let the caller fall back to raw `droid exec`.** `/droid:review` and `/droid:adversarial-review` set `disable-model-invocation: true`, so an agent cannot reach them; a bare `droid exec` from Bash bypasses the companion runtime entirely, registers no job record, and is lost the moment it hits the caller's foreground timeout (a 10-minute harness cap killed one mid-run, leaving nothing on disk to recover). Forward review, audit, and second-opinion work as `task --background` with the caller's review prompt, WITHOUT `--write`, and collect it exactly as below. That keeps the run detached, durable, and recoverable.
 - For a long review prompt, honor the prompt-file rule above — write it to a temp file and pass `--prompt-file` or `"$(cat <file>)"` rather than inlining thousands of lines as an argument.
-- Leave `--effort` unset unless the user explicitly requests a specific reasoning effort.
-- Leave model unset by default. Only add `--model` when the user explicitly asks for a specific model.
+- Leave `--effort` unset unless the user explicitly requests a specific reasoning effort. Accepted values are `off`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; supported levels vary per model and `/droid:models` lists them.
+- Leave model unset by default. Only add `--model` when the user explicitly asks for a specific model. With no flags, `DROID_DEFAULT_MODEL` / `DROID_DEFAULT_EFFORT` (if set) apply, else the CLI defaults.
 - If the user asks for a concrete model name such as `gpt-6.1-sol`, pass it through with `--model`.
 - Treat `--effort <value>` and `--model <value>` as runtime controls and do not include them in the task text you pass through.
 - Default to read-only. Add `--write` only when the user explicitly requests modifications.

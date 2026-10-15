@@ -3,6 +3,7 @@ import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
+import { VALID_REASONING_EFFORTS } from "../plugins/droid/scripts/lib/models.mjs";
 
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -76,6 +77,7 @@ test("continue is not exposed as a user-facing command", () => {
   assert.deepEqual(commandFiles, [
     "adversarial-review.md",
     "cancel.md",
+    "models.md",
     "rescue.md",
     "result.md",
     "review.md",
@@ -105,7 +107,8 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(rescue, /--background\|--wait/);
   assert.match(rescue, /--resume\|--fresh/);
   assert.match(rescue, /--model <model>/);
-  assert.match(rescue, /--effort <none\|minimal\|low\|medium\|high\|xhigh>/);
+  assert.ok(rescue.includes(`--effort <${VALID_REASONING_EFFORTS.join("|")}>`), "rescue argument-hint lists exactly the efforts the companion accepts");
+  assert.match(rescue, /Supported levels vary per model; `\/droid:models` lists them/);
   assert.match(rescue, /task-resume-candidate --json/);
   assert.match(rescue, /AskUserQuestion/);
   assert.match(rescue, /Continue current Droid thread/);
@@ -146,7 +149,9 @@ test("rescue command absorbs continue semantics", () => {
   assert.match(runtimeSkill, /Leave model unset by default/i);
   assert.match(runtimeSkill, /If the forwarded request includes `--background` or `--wait`, treat that as Claude-side execution control only/i);
   assert.match(runtimeSkill, /Strip it before calling `task`/i);
-  assert.match(runtimeSkill, /`--effort`: accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`/i);
+  assert.ok(runtimeSkill.includes(`\`--effort\`: accepted values are ${VALID_REASONING_EFFORTS.map(level => `\`${level}\``).join(", ")}.`), "runtime skill lists exactly the efforts the companion accepts");
+  assert.ok(agent.includes(`Accepted values are ${VALID_REASONING_EFFORTS.map(level => `\`${level}\``).join(", ")};`), "rescue agent lists exactly the efforts the companion accepts");
+  for (const doc of [runtimeSkill, agent]) assert.match(doc, /`\/droid:models` lists/);
   assert.match(runtimeSkill, /Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own/i);
   assert.match(runtimeSkill, /If the Bash call fails or Droid cannot be invoked, report the error in one line/i);
 });
@@ -214,4 +219,11 @@ test("every skill the rescue agent preloads resolves to a skill whose name match
   for (const skill of skills) {
     assert.match(read(`skills/${skill}/SKILL.md`), new RegExp(`^name: ${skill}$`, "m"));
   }
+});
+
+test("models command is user-only and forwards to the companion", () => {
+  const source = read("commands/models.md");
+  assert.match(source, /^disable-model-invocation: true$/m);
+  assert.match(source, /droid-companion\.mjs" models "\$ARGUMENTS"/);
+  assert.match(source, /allowed-tools: Bash\(node:\*\)/);
 });

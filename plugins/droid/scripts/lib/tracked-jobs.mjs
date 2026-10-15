@@ -5,13 +5,22 @@ import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { withFileLockSync } from "./file-lock.mjs";
-import { atomicWriteJson, emitJobEvent, resultEnvelope, resultFilePath, runJobCommand } from "./job-results.mjs";
+import { atomicWriteJson, emitJobEvent, jobUsage, resultEnvelope, resultFilePath, runJobCommand } from "./job-results.mjs";
 import { snapshotChangedFiles, changedFilesSince, validateWorktree } from "./worktree-jobs.mjs";
 export { resultEnvelope } from "./job-results.mjs";
 
 import { listJobs, readJobFile, resolveJobFile, resolveJobLogFile, upsertJob, writeJobFile } from "./state.mjs";
 
 export const SESSION_ID_ENV = "DROID_COMPANION_SESSION_ID";
+
+/** Records a turn's session-inclusive usage and the job's own share of it. Legacy records stored only the inclusive `usage`. */
+export function sessionUsageFields(workspaceRoot, jobId, threadId, sessionUsage) {
+  if (!sessionUsage) return { sessionUsage: null, usage: null };
+  const prior = threadId ? listJobs(workspaceRoot)
+    .filter(job => job.id !== jobId && job.threadId === threadId && (job.sessionUsage ?? job.usage))
+    .sort((a, b) => String(b.completedAt ?? b.updatedAt ?? "").localeCompare(String(a.completedAt ?? a.updatedAt ?? "")))[0] : null;
+  return { sessionUsage, usage: jobUsage(sessionUsage, prior ? prior.sessionUsage ?? prior.usage : null) };
+}
 
 export function nowIso() {
   return new Date().toISOString();
@@ -352,7 +361,8 @@ export async function runTrackedJob(job, runner, options = {}) {
       closeSegment(job.workspaceRoot, job.id);
       const paused = updateActiveJob(job, current => {
         if (current.cancelRequested) return { ...current, finalization: null };
-        const next = { ...current, status: "awaiting-answer", phase: "awaiting-answer", pid: null, workerPid: null, threadId: execution.threadId, turnId: execution.turnId, result: { ...payload, changedFiles: current.changedFiles ?? [] }, rendered: execution.rendered, finalization: null, pauseDelivery: { id: randomUUID(), senderPid: process.pid } };
+        const next = { ...current, status: "awaiting-answer", phase: "awaiting-answer", pid: null, workerPid: null, threadId: execution.threadId, turnId: execution.turnId, result: { ...payload, changedFiles: current.changedFiles ?? [] }, rendered: execution.rendered, finalization: null, pauseDelivery: { id: randomUUID(), senderPid: process.pid },
+          ...sessionUsageFields(job.workspaceRoot, job.id, execution.threadId, execution.usage ?? payload?.usage ?? null) };
         if (next.worktree && next.changedFilesError) throw new Error(`Changed-file report failed: ${next.changedFilesError}`);
         if (next.unlockError) throw new Error(`Worktree unlock failed: ${next.unlockError}`);
         // Publication shares the transition lock: cancellation can only publish
@@ -379,7 +389,7 @@ export async function runTrackedJob(job, runner, options = {}) {
     const completed = await finalizeTrackedJob(job.workspaceRoot, job.id, {
       status: execution.exitStatus === 0 ? "completed" : "failed", threadId: execution.threadId ?? null,
       turnId: execution.turnId ?? null, result: payload, rendered: execution.rendered, summary: execution.summary,
-      usage: execution.usage ?? payload?.usage ?? null,
+      ...sessionUsageFields(job.workspaceRoot, job.id, execution.threadId ?? null, execution.usage ?? payload?.usage ?? null),
       ...(execution.error ? { errorCode: execution.error.error ?? execution.error.code, errorMessage: execution.error.message, retryAfter: execution.error.retryAfter } : {})
     });
     if (completed.status !== "completed" && execution.exitStatus === 0) execution.exitStatus = 1;

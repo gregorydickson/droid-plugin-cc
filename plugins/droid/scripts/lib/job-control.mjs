@@ -167,7 +167,8 @@ export function publicJob(job) {
     "startedAt", "completedAt", "cancelledAt", "persistent", "write", "model", "effort",
     "logFile", "resultFile", "worktree", "resumedFrom", "resumedTo", "previousName",
     "schemaValid", "changedFiles", "errorCode", "errorMessage", "retryAfter"];
-  return Object.fromEntries(fields.filter(key => job[key] !== undefined).map(key => [key, key === "resultFile" ? resultFilePath(job) : job[key]]));
+  const usage = job.usage ?? job.result?.usage;
+  return { ...Object.fromEntries(fields.filter(key => job[key] !== undefined).map(key => [key, key === "resultFile" ? resultFilePath(job) : job[key]])), ...(usage ? { usage } : {}) };
 }
 
 export function enrichJob(job, options = {}) {
