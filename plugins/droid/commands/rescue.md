@@ -1,6 +1,6 @@
 ---
 description: Delegate investigation, an explicit fix request, or follow-up rescue work to the Droid rescue subagent
-argument-hint: "[--background|--wait] [--resume|--fresh] [--write] [--model <model>] [--effort <none|minimal|low|medium|high|xhigh>] [what Droid should investigate, solve, or continue]"
+argument-hint: "[--background|--wait] [--resume|--fresh] [--write] [--model <model>] [--effort <off|none|minimal|low|medium|high|xhigh|max>] [what Droid should investigate, solve, or continue]"
 allowed-tools: Bash(node:*), AskUserQuestion, Agent
 ---
 
@@ -42,7 +42,7 @@ Operating rules:
 - Return the Droid companion stdout verbatim to the user.
 - Do not paraphrase, summarize, rewrite, or add commentary before or after it.
 - Do not ask the subagent to inspect files, monitor progress, poll `/droid:status`, fetch `/droid:result`, call `/droid:cancel`, summarize output, or do follow-up work of its own.
-- Leave `--effort` unset unless the user explicitly asks for a specific reasoning effort.
+- Leave `--effort` unset unless the user explicitly asks for a specific reasoning effort. Supported levels vary per model; `/droid:models` lists them, and the Droid CLI rejects a level the model does not support.
 - Leave `--resume` and `--fresh` in the forwarded request. The subagent handles that routing when it builds the `task` command.
 - If the helper reports that Droid is missing or unauthenticated, stop and tell the user to run `/droid:setup`.
 - If the user did not supply a request, ask what Droid should investigate or fix.

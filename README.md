@@ -25,7 +25,8 @@ The marketplace manifest names this checkout `droid-fork`. Run `/droid:setup` af
 | `/droid:review [--base ref]` | Standard review of working-tree or branch changes |
 | `/droid:adversarial-review [focus]` | Review using the adversarial prompt |
 | `/droid:status [job-id]` | Inspect progress |
-| `/droid:result [job-id]` | Collect durable output |
+| `/droid:result [job-id]` | Collect durable output, with token and credit usage |
+| `/droid:models [--json]` | List models, their reasoning efforts, and the defaults in effect |
 | `/droid:cancel [job-id]` | Stop the job and its Droid process tree |
 | `/droid:setup --enable-review-gate` | Enable the stop-time review gate |
 | `/droid:setup --disable-review-gate` | Disable the gate |
@@ -39,7 +40,7 @@ The companion starts `droid exec --output-format stream-jsonrpc` once per job. I
 
 Read-only calls omit `--auto` and explicitly allow only `Read,LS,Grep,Glob,Execute`. On Droid 0.238.0, no `--auto` runs at read-only autonomy: read-only shell commands work, while a write command aborts the whole run without writing. `--write` maps to `--auto medium`: local development operations, including package installs and local git operations, may be allowed. This is an autonomy policy, not an OS filesystem sandbox. The plugin never passes `--skip-permissions-unsafe`.
 
-`--model` maps to `-m`, and `--effort` to `-r`; Factory validates model support. Resume passes the stored session ID with `--session-id`. Cancellation terminates the child's process group and publishes a cancelled job. SessionEnd cancels ephemeral jobs belonging to that Claude session; named or persistent jobs survive.
+`--model` maps to `-m`, and `--effort` to `-r`; Factory validates model support. Effort levels are `off`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, but each model supports a subset that `/droid:models` lists. Set `DROID_DEFAULT_MODEL` and `DROID_DEFAULT_EFFORT` to apply a model and effort when the flags are omitted; explicit flags win, and a resumed session keeps its stored model and effort unless overridden. `/droid:status` and `/droid:result` show each job's tokens and Factory credits when Droid reported them. Resume passes the stored session ID with `--session-id`. Cancellation terminates the child's process group and publishes a cancelled job. SessionEnd cancels ephemeral jobs belonging to that Claude session; named or persistent jobs survive.
 
 ## Structured workers
 

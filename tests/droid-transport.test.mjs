@@ -6,7 +6,7 @@ import { runDroidTurn, buildPauseOutputSchema } from "../plugins/droid/scripts/l
 import { resolveRuntimeOptions } from "../plugins/droid/scripts/lib/runtime-options.mjs";
 import { makeTempDir } from "./helpers.mjs";
 import { installWorkerDroid } from "./worker-droid-fixture.mjs";
-import { buildEnv } from "./fake-droid-fixture.mjs";
+import { buildEnv, SESSION_USAGE } from "./fake-droid-fixture.mjs";
 const schema = { type: "object", required: ["count"], additionalProperties: false, properties: { count: { type: "integer" } } };
 function fixture(t, behavior) {
   const bin = makeTempDir(); installWorkerDroid(bin, behavior);
@@ -20,7 +20,7 @@ test("Droid streams progress, returns usage, maps controls, and resumes its sess
   const progress = [];
   const first = await runDroidTurn(makeTempDir(), { prompt: "Count", outputSchema: schema, model: "factory-model", effort: "max", onProgress: event => progress.push(event) });
   assert.equal(first.status, 0); assert.deepEqual(JSON.parse(first.finalMessage), { count: 2 });
-  assert.deepEqual(first.usage, { inputTokens: 10, outputTokens: 2 });
+  assert.deepEqual(first.usage, SESSION_USAGE[0]);
   assert.ok(progress.some(event => event.threadId === first.threadId));
   const initialArgs = state().threadRequests[0].args;
   assert.ok(!initialArgs.includes("--auto"));
@@ -29,15 +29,16 @@ test("Droid streams progress, returns usage, maps controls, and resumes its sess
   assert.equal(initialArgs[initialArgs.indexOf("-r") + 1], "max");
   const resumed = await runDroidTurn(makeTempDir(), { prompt: "Continue", resumeThreadId: first.threadId, sandbox: "workspace-write" });
   assert.equal(resumed.threadId, first.threadId);
+  assert.deepEqual(resumed.usage, SESSION_USAGE[1], "a continued turn reports the session-inclusive total");
   const args = state().threadRequests.at(-1).args;
   assert.equal(args[args.indexOf("--session-id") + 1], first.threadId);
   assert.equal(args[args.indexOf("--auto") + 1], "medium");
 });
-test("schema repair resumes once read-only and includes both turns' usage", async t => {
+test("schema repair takes the repair turn's session-inclusive usage, not a sum", async t => {
   const state = fixture(t, "repair-once");
   const result = await runDroidTurn(makeTempDir(), { prompt: "Count", outputSchema: schema, sandbox: "workspace-write" });
   assert.equal(result.status, 0); assert.deepEqual(JSON.parse(result.finalMessage), { count: 2 });
-  assert.deepEqual(result.usage, { inputTokens: 20, outputTokens: 4 });
+  assert.deepEqual(result.usage, SESSION_USAGE[1]);
   const requests = state().threadRequests;
   assert.deepEqual(requests.map(r => r.threadId), [result.threadId, result.threadId]);
   assert.ok(!requests[1].args.includes("--auto"));

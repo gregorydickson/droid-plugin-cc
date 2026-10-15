@@ -1,7 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import { writeExecutable } from "./helpers.mjs";
+
+// Session-inclusive usage after turns 1 and 2 of one session (droid 0.238.0, haiku, live runs).
+// Turn N > 2 extends the same per-turn increment.
+export const SESSION_USAGE = [
+  { inputTokens: 9, outputTokens: 216, cacheReadTokens: 0, cacheCreationTokens: 5322, thinkingTokens: 158, factoryCredits: 3097 },
+  { inputTokens: 18, outputTokens: 275, cacheReadTokens: 0, cacheCreationTokens: 10760, thinkingTokens: 189, factoryCredits: 5938 }
+];
+export const HELP_FIXTURE = fileURLToPath(new URL("./fixtures/droid-exec-help-0.238.0.txt", import.meta.url));
 
 export function installFakeDroid(binDir, behavior = "review-ok", worker = false) {
   const statePath = path.join(binDir, "fake-droid-state.json");
@@ -9,11 +18,13 @@ export function installFakeDroid(binDir, behavior = "review-ok", worker = false)
 const fs = require("node:fs");
 const crypto = require("node:crypto");
 const STATE_PATH = ${JSON.stringify(statePath)};
+const SESSION_USAGE = ${JSON.stringify(SESSION_USAGE)};
 const BEHAVIOR = ${JSON.stringify(behavior)};
 const WORKER = ${JSON.stringify(worker)};
 const args = process.argv.slice(2);
 const arg = flag => args[args.indexOf(flag) + 1];
 if (args[0] === "--version") { console.log("droid-cli test"); process.exit(0); }
+if (args[0] === "exec" && args.includes("--help")) { process.stdout.write(fs.readFileSync(${JSON.stringify(HELP_FIXTURE)}, "utf8")); process.exit(0); }
 const FORMAT = arg("--output-format");
 if (args[0] !== "exec" || !["stream-jsonrpc", "stream-json"].includes(FORMAT)) process.exit(2);
 // The real CLI's flag check (droid 0.238.0), so a bad argv fails here as it does live.
@@ -29,6 +40,10 @@ state.execStarts++;
 const resume = args.includes("--session-id");
 const threadId = resume ? arg("--session-id") : crypto.randomUUID();
 if (!resume) state.threads.push({ id: threadId, cwd: process.cwd() });
+state.sessionTurns = { ...state.sessionTurns, [threadId]: (state.sessionTurns?.[threadId] ?? 0) + 1 };
+const turnNumber = state.sessionTurns[threadId];
+const [first, second] = SESSION_USAGE;
+const sessionUsage = Object.fromEntries(Object.keys(first).map(key => [key, first[key] + (turnNumber - 1) * (second[key] - first[key])]));
 const turnId = crypto.randomUUID();
 state.lastTurnStart = { threadId, turnId, prompt, model: args.includes("-m") ? arg("-m") : null, effort: args.includes("-r") ? arg("-r") : null };
 state.turns = [...(state.turns || []), state.lastTurnStart];
@@ -46,7 +61,7 @@ const notify = FORMAT === "stream-jsonrpc"
     if (n.type === "error") line({ type: "error", message: n.message });
     if (n.type === "assistant_text_delta") streamText += n.textDelta;
     if (n.type === "assistant_text_complete") line({ type: "message", role: "assistant", id: n.messageId, text: streamText });
-    if (n.type === "agent_turn_completed") line({ type: "completion", finalText: streamText, numTurns: 1, usage: { input_tokens: n.tokenUsage.inputTokens, output_tokens: n.tokenUsage.outputTokens } });
+    if (n.type === "agent_turn_completed") line({ type: "completion", finalText: streamText, numTurns: 1, usage: { input_tokens: n.tokenUsage.inputTokens, output_tokens: n.tokenUsage.outputTokens, cache_read_input_tokens: n.tokenUsage.cacheReadTokens, cache_creation_input_tokens: n.tokenUsage.cacheCreationTokens, factory_credits: n.tokenUsage.factoryCredits, thinking_tokens: n.tokenUsage.thinkingTokens, ttft_ms: 1629 } });
   };
 if (FORMAT === "stream-jsonrpc") send({ type: "response", id: "init", result: { sessionId: threadId } });
 else line({ type: "system", subtype: "init", cwd: process.cwd(), tools: [] });
@@ -79,7 +94,7 @@ const finish = () => {
   notify({ type: "assistant_text_delta", messageId: "answer", blockIndex: 0, textDelta: payload.slice(7) });
   notify({ type: "assistant_text_complete", messageId: "answer", blockIndex: 0 });
   if (BEHAVIOR === "text-then-hang") return;
-  notify({ type: "agent_turn_completed", reason: "completed", turnId, tokenUsage: { inputTokens: 10, outputTokens: 2 } });
+  notify({ type: "agent_turn_completed", reason: "completed", turnId, tokenUsage: sessionUsage });
   if (BEHAVIOR === "trailing-prose") console.log("late diagnostic");
 };
 if (BEHAVIOR === "interruptible-slow-task") setTimeout(finish, 5000);

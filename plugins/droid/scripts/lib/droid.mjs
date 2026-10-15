@@ -17,6 +17,10 @@ export function getDroidAvailability(cwd) {
   const { command, prefix } = invocation();
   return binaryAvailable(command, [...prefix, "--version"], { cwd });
 }
+export function getDroidExecHelp(cwd) {
+  const { command, prefix } = invocation();
+  return runCommand(command, [...prefix, "exec", "--help"], { cwd });
+}
 export function getSessionRuntimeStatus() {
   return { mode: "direct", label: "per-job process", detail: "Each job runs an isolated droid exec child; sessions resume from the stored session ID.", endpoint: null };
 }
@@ -80,7 +84,8 @@ export async function runDroidTurn(cwd, options = {}) {
       const firstUsage = result.usage;
       result = await executeTurn(cwd, { ...options, resumeThreadId: result.threadId,
         prompt: `Your previous answer did not match the required JSON schema. Return corrected JSON only, without tools or further task work.\nSchema: ${JSON.stringify(schema)}\nValidation errors: ${JSON.stringify(validate.errors)}\nPrevious answer: ${result.finalMessage}`, repair: true });
-      if (firstUsage) result.usage = Object.fromEntries([...new Set([...Object.keys(firstUsage), ...Object.keys(result.usage ?? {})])].map(key => [key, (firstUsage[key] ?? 0) + (result.usage?.[key] ?? 0)]));
+      // A continued turn reports session-inclusive usage, which already counts the first turn.
+      result.usage ??= firstUsage;
     }
     try {
       if (!validate(JSON.parse(result.finalMessage))) throw new Error(JSON.stringify(validate.errors));
@@ -110,10 +115,10 @@ export function buildDroidExecArgs(cwd, file, options = {}) {
   return args;
 }
 
-function streamJsonUsage(usage) {
+export function streamJsonUsage(usage) {
   if (!usage) return null;
   const keys = { input_tokens: "inputTokens", output_tokens: "outputTokens", cache_read_input_tokens: "cacheReadTokens",
-    cache_creation_input_tokens: "cacheCreationTokens", thinking_tokens: "thinkingTokens" };
+    cache_creation_input_tokens: "cacheCreationTokens", thinking_tokens: "thinkingTokens", factory_credits: "factoryCredits", factoryCredits: "factoryCredits" };
   return Object.fromEntries(Object.entries(keys).filter(([key]) => typeof usage[key] === "number").map(([key, name]) => [name, usage[key]]));
 }
 

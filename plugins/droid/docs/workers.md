@@ -9,7 +9,7 @@ The companion accepts these task options:
 - `--name NAME`, `--persistent`, `--pause-and-ask`.
 - `--worktree PATH`, `--lock-cmd COMMAND`, `--unlock-cmd COMMAND`.
 - `--on-start`, `--on-progress`, `--on-stop-report`, `--on-end`, `--on-fail` commands.
-- `--write`, `--model ID`, `--effort LEVEL`, `--background`, `--json`.
+- `--write`, `--model ID`, `--effort LEVEL`, `--background`, `--json`. Without `--model`/`--effort`, `DROID_DEFAULT_MODEL`/`DROID_DEFAULT_EFFORT` apply.
 
 Shell lifecycle commands are caller code and require caller authorization. Runtime events include job IDs and stable delivery IDs for idempotent recovery. Job files retain private configuration; public status/results omit executable hook contents.
 

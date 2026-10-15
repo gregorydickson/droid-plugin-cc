@@ -5,6 +5,16 @@ import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { Ajv, Ajv2020 } from "../vendor/runtime-deps.mjs";
 
+/**
+ * Droid reports usage cumulatively per session, so a job's own usage is its
+ * session total minus the total recorded by the session's previous job.
+ */
+export function jobUsage(sessionUsage, priorSessionUsage) {
+  if (!sessionUsage || !priorSessionUsage) return sessionUsage ?? null;
+  return Object.fromEntries(Object.entries(sessionUsage).map(([key, value]) =>
+    [key, typeof value === "number" && typeof priorSessionUsage[key] === "number" ? Math.max(0, value - priorSessionUsage[key]) : value]));
+}
+
 export function validateOutputSchema(schema) {
   const Validator = schema?.$schema?.includes("2020-12") ? Ajv2020 : Ajv;
   return new Validator({ allErrors: true, strict: false }).compile(schema);

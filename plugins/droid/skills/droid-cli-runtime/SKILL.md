@@ -30,7 +30,7 @@ Command selection:
 - If the forwarded request includes `--fresh`, strip that token from the task text and do not add `--resume-last`.
 - `--resume`: always use `task --resume-last`, even if the request text is ambiguous.
 - `--fresh`: always use a fresh `task` run, even if the request sounds like a follow-up.
-- `--effort`: accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`.
+- `--effort`: accepted values are `off`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Supported levels vary per model; `/droid:models` lists each model's levels and the CLI rejects an unsupported one.
 - `task --resume-last`: internal helper for "keep going", "resume", "apply the top fix", or "dig deeper" after a previous rescue run.
 
 Safety rules:
@@ -40,6 +40,6 @@ Safety rules:
 - Return the stdout of the `task` command exactly as-is.
 - If the Bash call fails or Droid cannot be invoked, report the error in one line.
 
-Runtime mapping: read-only jobs omit `--auto` and restrict tools to `Read,LS,Grep,Glob,Execute`. `--write` maps to `droid exec --auto medium`, which permits local development operations beyond file edits. `--model` maps to `-m`, `--effort` maps to `-r`; model IDs pass through without aliases. `--resume-last` uses the session ID stored with the previous job as `--session-id`. No settings files are changed. Each job owns one process group; cancellation terminates that group.
+Runtime mapping: read-only jobs omit `--auto` and restrict tools to `Read,LS,Grep,Glob,Execute`. `--write` maps to `droid exec --auto medium`, which permits local development operations beyond file edits. `--model` maps to `-m`, `--effort` maps to `-r`; model IDs pass through without aliases. Without the flags, `DROID_DEFAULT_MODEL` and `DROID_DEFAULT_EFFORT` apply to task, review and worker runs; resumed sessions keep their stored model and effort unless overridden. `--resume-last` uses the session ID stored with the previous job as `--session-id`. No settings files are changed. Each job owns one process group; cancellation terminates that group.
 
 Verified on Droid 0.238.0: without `--auto`, read-only autonomy allows `git log` and `git show HEAD:a.txt` through Execute. `touch b.txt` aborts the whole run with "Exec ended early: insufficient permission to proceed" and writes nothing. Repair turns use this same fence. `--auto medium` is an autonomy policy, not a filesystem sandbox; fence writes in the forwarded prompt and check changedFiles.

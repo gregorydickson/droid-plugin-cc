@@ -81,6 +81,17 @@ function isStructuredReviewStoredResult(storedJob) {
   );
 }
 
+const isCount = value => typeof value === "number" && Number.isFinite(value);
+
+/** One line of tokens and Factory credits, or null when the job recorded no usage. */
+export function formatUsage(usage) {
+  if (!usage || typeof usage !== "object") return null;
+  const parts = [];
+  if (isCount(usage.inputTokens) || isCount(usage.outputTokens)) parts.push(`${usage.inputTokens ?? 0} in / ${usage.outputTokens ?? 0} out tokens`);
+  if (isCount(usage.factoryCredits)) parts.push(`${usage.factoryCredits} credits`);
+  return parts.length ? parts.join(", ") : null;
+}
+
 function formatJobLine(job) {
   const parts = [job.id, `${job.status || "unknown"}`];
   if (job.kindLabel) {
@@ -135,6 +146,10 @@ function pushJobDetails(lines, job, options = {}) {
   if (options.showDuration && job.duration) {
     lines.push(`  Duration: ${job.duration}`);
   }
+  const usage = formatUsage(job.usage);
+  if (usage) {
+    lines.push(`  Usage: ${usage}`);
+  }
   if (job.threadId) {
     lines.push(`  Droid session ID: ${job.threadId}`);
   }
@@ -186,6 +201,8 @@ export function renderSetupReport(report) {
     `- auth: ${report.auth.detail}`,
     `- session runtime: ${report.sessionRuntime.label}`,
     `- review gate: ${report.reviewGateEnabled ? "enabled" : "disabled"}`,
+    `- default model: ${report.defaults?.model ?? "CLI default"}${report.defaults?.model ? " (DROID_DEFAULT_MODEL)" : ""}`,
+    `- default effort: ${report.defaults?.effort ?? "model default"}${report.defaults?.effort ? " (DROID_DEFAULT_EFFORT)" : ""}`,
     ""
   ];
 
@@ -365,6 +382,11 @@ export function renderStatusReport(report) {
     lines.push("No jobs recorded yet.", "");
   }
 
+  const credited = [...report.running, ...(report.latestFinished ? [report.latestFinished] : []), ...report.recent].filter(job => isCount(job.usage?.factoryCredits));
+  if (credited.length) {
+    lines.push(`Total credits: ${credited.reduce((sum, job) => sum + job.usage.factoryCredits, 0)} across ${credited.length} listed job${credited.length === 1 ? "" : "s"} with usage`, "");
+  }
+
   if (report.needsReview) {
     lines.push("The stop-time review gate is enabled.");
     lines.push("Ending the session will trigger a fresh Droid adversarial review and block if it finds issues.");
@@ -387,6 +409,12 @@ export function renderJobStatusReport(job) {
 }
 
 export function renderStoredJobResult(job, storedJob) {
+  const output = renderStoredJobBody(job, storedJob);
+  const usage = formatUsage(storedJob?.usage ?? storedJob?.result?.usage ?? job.usage);
+  return usage ? `${output}\nUsage: ${usage}\n` : output;
+}
+
+function renderStoredJobBody(job, storedJob) {
   const threadId = storedJob?.threadId ?? job.threadId ?? null;
   const resumeCommand = threadId ? `droid resume ${threadId}` : null;
   if (isStructuredReviewStoredResult(storedJob) && storedJob?.rendered) {
