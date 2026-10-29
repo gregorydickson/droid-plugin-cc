@@ -53,11 +53,18 @@ export function resultEnvelope(job) {
     ...(job.unlockError ? { unlockError: job.unlockError } : {}),
     ...(job.deliveryErrors?.length ? { deliveryErrors: job.deliveryErrors } : {}),
     ...(job.changedFilesError ? { changedFilesError: job.changedFilesError } : {}),
+    ...(job.readOnlyViolation ? { readOnlyViolation: job.readOnlyViolation } : {}),
     ...(job.errorMessage ? { error: job.errorCode ?? job.errorMessage, retryAfter: job.retryAfter ?? null } : {}),
     job: { id: job.id, name: job.name ?? null, sessionId: job.sessionId ?? null,
       context: job.context ?? null, model: job.model ?? null, effort: job.effort ?? null,
       profile: job.effectiveProfile ?? job.profile ?? null, activeMcpServers: job.activeServers ?? job.activeMcpServers ?? null }
   };
+}
+
+export function formatReadOnlyViolation(violation) {
+  return violation?.changedFiles?.length
+    ? `Read-only violation: workspace files changed while this --run-commands job ran: ${violation.changedFiles.join(", ")}`
+    : null;
 }
 
 // A {jobId} placeholder lets one --result-file pattern serve every turn of a session.

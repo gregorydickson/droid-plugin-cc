@@ -87,6 +87,8 @@ else if (prompt.startsWith("Review code changes")) payload = nativeReviewText(pr
 else payload = taskPayload(prompt, resume);
 if (BEHAVIOR === "invalid-json" || (BEHAVIOR === "repair-once" && !prompt.startsWith("Your previous answer"))) payload = "not valid json";
 if (BEHAVIOR === "repair-once" && prompt.startsWith("Your previous answer")) payload = '{"count":2}';
+// A run that edits the workspace, as a shell command under --auto medium can.
+if (BEHAVIOR === "writes-file") fs.writeFileSync(require("node:path").join(process.cwd(), "droid-wrote.txt"), "written by droid");
 const finish = () => {
   if (BEHAVIOR === "warning-success") notify({ type: "error", message: "Temporary model error" });
   if (BEHAVIOR === "blank-lines") console.log("  ");

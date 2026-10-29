@@ -166,7 +166,7 @@ export function publicJob(job) {
     "status", "phase", "title", "summary", "threadId", "turnId", "createdAt", "updatedAt",
     "startedAt", "completedAt", "cancelledAt", "persistent", "write", "model", "effort",
     "logFile", "resultFile", "worktree", "resumedFrom", "resumedTo", "previousName",
-    "schemaValid", "changedFiles", "errorCode", "errorMessage", "retryAfter"];
+    "schemaValid", "changedFiles", "errorCode", "errorMessage", "retryAfter", "runCommands", "mcpTools", "readOnlyViolation"];
   const usage = job.usage ?? job.result?.usage;
   return { ...Object.fromEntries(fields.filter(key => job[key] !== undefined).map(key => [key, key === "resultFile" ? resultFilePath(job) : job[key]])), ...(usage ? { usage } : {}) };
 }

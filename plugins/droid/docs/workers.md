@@ -9,11 +9,11 @@ The companion accepts these task options:
 - `--name NAME`, `--persistent`, `--pause-and-ask`.
 - `--worktree PATH`, `--lock-cmd COMMAND`, `--unlock-cmd COMMAND`.
 - `--on-start`, `--on-progress`, `--on-stop-report`, `--on-end`, `--on-fail` commands.
-- `--write`, `--model ID`, `--effort LEVEL`, `--background`, `--json`. Without `--model`/`--effort`, `DROID_DEFAULT_MODEL`/`DROID_DEFAULT_EFFORT` apply.
+- `--write` or `--run-commands`, repeated `--mcp-tool SERVER[/TOOL]`, `--model ID`, `--effort LEVEL`, `--background`, `--json`. Without `--model`/`--effort`, `DROID_DEFAULT_MODEL`/`DROID_DEFAULT_EFFORT` apply.
 
 Shell lifecycle commands are caller code and require caller authorization. Runtime events include job IDs and stable delivery IDs for idempotent recovery. Job files retain private configuration; public status/results omit executable hook contents.
 
-Read-only is the default. `--write` maps to Factory's `--auto medium`, not a filesystem sandbox. A supplied worktree must already exist; the companion validates its root and snapshots changes inside the caller's lock. Unlock and result-publication failures cannot become successful completions.
+Read-only is the default. `--write` maps to Factory's `--auto medium`, not a filesystem sandbox. `--run-commands` adds `--auto medium` to the read-only toolset so tests can run; the shell can still write, so the envelope reports any workspace change as `readOnlyViolation`. A supplied worktree must already exist; the companion validates its root and snapshots changes inside the caller's lock. Unlock and result-publication failures cannot become successful completions.
 
 `task --resume-last` and `sessions resume NAME PROMPT` continue the stored Droid session ID. Write intent, schema, instructions, worktree, and lifecycle controls are inherited. Brief and preread input from the previous slice is not sent again. `sessions list` lists retained jobs; `sessions stop NAME` cancels one.
 

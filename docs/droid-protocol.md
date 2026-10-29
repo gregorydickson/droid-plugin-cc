@@ -33,6 +33,8 @@ Normal execution hit sandbox EPERM writing Droid logs. Probes then used `FACTORY
 
 Verified on real Droid 0.238.0: omitting `--auto` runs at read-only autonomy. With `--only-tools Read,LS,Grep,Glob,Execute`, `git log` and `git show HEAD:a.txt` returned output; `touch b.txt` aborted the whole run with "Exec ended early: insufficient permission to proceed" and wrote nothing. Reviews can self-collect context. Schema repair uses the same fence. Write jobs pass `--auto medium`, an autonomy policy rather than a filesystem sandbox. Forwarding agents must fence authorized write paths in the prompt and check changedFiles afterward. No unsafe-permission flag is used.
 
+`--run-commands` jobs pass `--auto medium --only-tools Read,LS,Grep,Glob,Execute`. The maintainer checked this on 2026-10-29: medium-risk commands run, and Edit, Create and ApplyPatch are not offered. Because the shell can still write, the companion reports workspace changes as `readOnlyViolation`. `--mcp-tool` selectors become `MCP:<server>[/<tool>]` entries in `--only-tools`, or in `--add-tools` on write jobs. Fresh and continued turns are both one-shot execs (no `--input-format`), so these flags apply on every turn; the fake transport tests assert them on fresh and resumed turns.
+
 This adapter uses prompt-level schema instructions and local Ajv validation with one read-only repair retry. The CLI help exposes no schema flag. The installed controlled-RPC schema does include `structuredOutputFormat`; the plugin does not depend on that unverified enforcement path.
 
 Reference: [Factory headless execution documentation](https://docs.factory.com/droid-exec/overview). Local observations above take precedence where help, documentation, and runtime behavior differ.

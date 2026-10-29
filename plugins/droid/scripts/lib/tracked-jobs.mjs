@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { withFileLockSync } from "./file-lock.mjs";
-import { atomicWriteJson, emitJobEvent, jobUsage, resultEnvelope, resultFilePath, runJobCommand } from "./job-results.mjs";
+import { atomicWriteJson, emitJobEvent, formatReadOnlyViolation, jobUsage, resultEnvelope, resultFilePath, runJobCommand } from "./job-results.mjs";
 import { snapshotChangedFiles, changedFilesSince, validateWorktree } from "./worktree-jobs.mjs";
 export { resultEnvelope } from "./job-results.mjs";
 
@@ -254,6 +254,8 @@ export async function finalizeTrackedJob(workspaceRoot, jobId, patch, options = 
         completed.status = "failed"; completed.phase = "failed";
         completed.errorCode = "changed_files_failed"; completed.errorMessage = `Changed-file report failed: ${completed.changedFilesError}`;
       }
+      // --run-commands withholds file tools but a shell command can still write, so any change is reported.
+      if (completed.runCommands && completed.changedFiles?.length) completed.readOnlyViolation = { changedFiles: completed.changedFiles };
       const envelope = resultEnvelope(completed);
       completed.schemaValid = envelope.schemaValid;
       completed.parseError = envelope.parseError;
@@ -265,8 +267,7 @@ export async function finalizeTrackedJob(workspaceRoot, jobId, patch, options = 
           completed.errorCode = "result_file_failed"; completed.errorMessage = `Result-file publication failed: ${error.message}`;
         }
       }
-      if (completed.unlockError || ["result_file_failed", "changed_files_failed"].includes(completed.errorCode)) completed.rendered = `${completed.rendered ?? ""}\nJob failed: ${completed.errorMessage}\n`;
-      completed.terminalDelivery = { id: randomUUID(), event: completed.status === "failed" || completed.status === "orphaned" ? "fail" : "end", delivered: false, senderPid: null };
+      if (completed.unlockError || ["result_file_failed", "changed_files_failed"].includes(completed.errorCode)) completed.rendered = `${completed.rendered ?? ""}\nJob failed: ${completed.errorMessage}\n`;      completed.terminalDelivery = { id: randomUUID(), event: completed.status === "failed" || completed.status === "orphaned" ? "fail" : "end", delivered: false, senderPid: null };
       return completed;
     });
   }
@@ -335,7 +336,7 @@ export async function runTrackedJob(job, runner, options = {}) {
       const next = { ...current };
       if (next.cancelRequested) return next;
       if (job.worktree) next.changedFilesBefore = snapshotChangedFiles(job.workspaceRoot);
-      else if (job.structured || job.write) {
+      else if (job.structured || job.write || job.runCommands) {
         try { next.changedFilesBefore = snapshotChangedFiles(job.workspaceRoot); } catch (error) { next.changedFilesError = error.message; }
       }
       return next;
@@ -394,6 +395,8 @@ export async function runTrackedJob(job, runner, options = {}) {
     });
     if (completed.status !== "completed" && execution.exitStatus === 0) execution.exitStatus = 1;
     if (completed.unlockError || ["result_file_failed", "changed_files_failed"].includes(completed.errorCode)) execution.rendered = completed.rendered;
+    const violation = formatReadOnlyViolation(completed.readOnlyViolation);
+    if (violation) execution.rendered = `${execution.rendered ?? ""}\n${violation}\n`;
     appendLogBlock(runningRecord.logFile, "Final output", execution.rendered);
     if (job.structured) execution.payload = resultEnvelope(completed);
     return execution;

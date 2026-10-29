@@ -21,6 +21,7 @@ The marketplace manifest names this checkout `droid-fork`. Run `/droid:setup` af
 | --- | --- |
 | `/droid:rescue <task>` | Delegate a task; read-only by default |
 | `/droid:rescue --write <task>` | Authorize development changes |
+| `/droid:rescue --run-commands <task>` | Run tests and other commands, with no file-editing tools |
 | `/droid:rescue --resume <prompt>` | Continue the last tracked task in this Claude session |
 | `/droid:review [--base ref]` | Standard review of working-tree or branch changes |
 | `/droid:adversarial-review [focus]` | Review using the adversarial prompt |
@@ -32,13 +33,17 @@ The marketplace manifest names this checkout `droid-fork`. Run `/droid:setup` af
 | `/droid:setup --disable-review-gate` | Disable the gate |
 | `/droid:transfer` | Explain transcript-import limits and the summary-based alternative |
 
-Rescue supports `--background`, `--wait`, `--fresh`, `--model ID`, and `--effort LEVEL`. Both review commands are always read-only. The plugin supplies the git diff; Droid can read repository files for context. Large diffs are passed in a prompt file, subject to the CLI's context limit.
+Rescue supports `--background`, `--wait`, `--fresh`, `--model ID`, and `--effort LEVEL`. Both review commands are read-only by default and accept `--run-commands` to run tests while reviewing. Rescue and both reviews accept `--mcp-tool SERVER[/TOOL]` (repeatable). The plugin supplies the git diff; Droid can read repository files for context. Large diffs are passed in a prompt file, subject to the CLI's context limit.
 
 ## Permissions and execution
 
 The companion starts `droid exec --output-format stream-jsonrpc` once per job. It reads structured progress and completion events and stores the returned session ID. There is no shared broker. The session history belongs to Droid; job records and rendered results belong to the plugin.
 
 Read-only calls omit `--auto` and explicitly allow only `Read,LS,Grep,Glob,Execute`. On Droid 0.238.0, no `--auto` runs at read-only autonomy: read-only shell commands work, while a write command aborts the whole run without writing. `--write` maps to `--auto medium`: local development operations, including package installs and local git operations, may be allowed. This is an autonomy policy, not an OS filesystem sandbox. The plugin never passes `--skip-permissions-unsafe`.
+
+Read-only autonomy ends a headless run with `no_approver_available` as soon as Droid rates a command above read-only, which includes most test runners. `--run-commands` (task, review, adversarial-review) passes `--auto medium --only-tools Read,LS,Grep,Glob,Execute`: medium-risk commands such as `npm test` run, and the Edit, Create and ApplyPatch tools are not offered. It is not a write fence, because a shell command can still write files. The companion snapshots the workspace's git status before the run and, if any file changed by the end, adds `readOnlyViolation: { changedFiles }` to the result and prints a `Read-only violation` line in result and status output. The snapshot covers the whole workspace, so a file someone else edits during the run is reported too. `--run-commands` cannot be combined with `--write`, and it carries over to resumed turns. Schema-repair turns stay read-only.
+
+MCP tools are off in read-only and `--run-commands` jobs. `--mcp-tool SERVER` or `--mcp-tool SERVER/TOOL` (repeatable; an `MCP:` prefix is accepted; percent-encode `/`, `,` or spaces inside a name) adds `MCP:<selector>` to that job's `--only-tools` list. On a `--write` job, which already gets Droid's default toolset, the selectors go to `--add-tools` instead, so they make sure the tool is enabled but do not restrict MCP. Selectors name servers that are already configured in Droid; `--mcp-config` is still unsupported. When a job runs under a lock wrapper that fences Droid's home with an empty `mcp.json` and refuses `--add-tools`, selectors have nothing to select, and a `--write` job with `--mcp-tool` is refused, so they only take effect for jobs that are not fenced.
 
 `--model` maps to `-m`, and `--effort` to `-r`; Factory validates model support. Effort levels are `off`, `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, but each model supports a subset that `/droid:models` lists. Set `DROID_DEFAULT_MODEL` and `DROID_DEFAULT_EFFORT` to apply a model and effort when the flags are omitted; explicit flags win, and a resumed session keeps its stored model and effort unless overridden. `/droid:status` and `/droid:result` show each job's tokens and Factory credits when Droid reported them. Resume passes the stored session ID with `--session-id`. Cancellation terminates the child's process group and publishes a cancelled job. SessionEnd cancels ephemeral jobs belonging to that Claude session; named or persistent jobs survive.
 
@@ -61,9 +66,9 @@ Workers retain named sessions, pause-and-ask/answer, result files, notification 
 
 ## Limits
 
-The previous provider's native reviewer is replaced by a read-only review prompt. Native Claude transcript import, provider profiles/TOML MCP overrides, exact subagent fanout accounting, and live turn steering are unavailable in this adapter. Unsupported profile, MCP-config, and fanout flags fail explicitly. Use a brief/preread for handoff context, independent worker jobs for parallel work, and another resumed turn for follow-ups. `send` reports that live steering is unavailable.
+The previous provider's native reviewer is replaced by a read-only review prompt. Native Claude transcript import, provider profiles/TOML MCP overrides, exact subagent fanout accounting, and live turn steering are unavailable in this adapter. Unsupported profile, MCP-config, and fanout flags fail explicitly. Use a brief/preread for handoff context, independent worker jobs for parallel work, and another resumed turn for follow-ups. `send` reports that live steering is unavailable; [docs/live-steering.md](docs/live-steering.md) explains why and what it would take.
 
-Only tracked job sessions can be resumed; the plugin does not search Droid's global session history. Droid may retain session history for reviews as well as tasks; plugin cleanup does not delete that Factory history. Usage comes from completion events and may be absent on failures. The adapter does not collect private reasoning or child-agent transcripts. Read-only jobs cannot run tests or shell commands; the host supplies review diffs.
+Only tracked job sessions can be resumed; the plugin does not search Droid's global session history. Droid may retain session history for reviews as well as tasks; plugin cleanup does not delete that Factory history. Usage comes from completion events and may be absent on failures. The adapter does not collect private reasoning or child-agent transcripts. Read-only jobs run only commands Droid rates read-only, so use `--run-commands` for tests; the host supplies review diffs.
 
 ## Development
 

@@ -1,6 +1,6 @@
 ---
 description: Delegate investigation, an explicit fix request, or follow-up rescue work to the Droid rescue subagent
-argument-hint: "[--background|--wait] [--resume|--fresh] [--write] [--model <model>] [--effort <off|none|minimal|low|medium|high|xhigh|max>] [what Droid should investigate, solve, or continue]"
+argument-hint: "[--background|--wait] [--resume|--fresh] [--write|--run-commands] [--mcp-tool <server[/tool]>] [--model <model>] [--effort <off|none|minimal|low|medium|high|xhigh|max>] [what Droid should investigate, solve, or continue]"
 allowed-tools: Bash(node:*), AskUserQuestion, Agent
 ---
 
@@ -47,4 +47,4 @@ Operating rules:
 - If the helper reports that Droid is missing or unauthenticated, stop and tell the user to run `/droid:setup`.
 - If the user did not supply a request, ask what Droid should investigate or fix.
 
-Default to read-only. Preserve an explicit `--write` flag; the runtime maps it to Factory `--auto medium`. Model IDs pass through unchanged.
+Default to read-only. Preserve an explicit `--write` flag; the runtime maps it to Factory `--auto medium`. Preserve `--run-commands` (run tests and commands with no file-editing tools; not a write fence) and `--mcp-tool` flags the same way. Model IDs pass through unchanged.

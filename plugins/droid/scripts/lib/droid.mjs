@@ -98,17 +98,37 @@ export async function runDroidTurn(cwd, options = {}) {
   return result;
 }
 
+export const READ_ONLY_TOOLS = Object.freeze(["Read", "LS", "Grep", "Glob", "Execute"]);
+
+/** `server` or `server/tool` (percent-encoded segments), optionally written with droid's `MCP:` prefix. */
+export function normalizeMcpToolSelector(value) {
+  const selector = String(value ?? "").replace(/^MCP:/, "");
+  if (!/^[^\s,/]+(\/[^\s,/]+)?$/.test(selector)) {
+    throw new Error(`Invalid --mcp-tool "${value}". Use <server> or <server>/<tool>; percent-encode a "/", "," or space inside a name.`);
+  }
+  return selector;
+}
+
 /**
  * droid refuses --session-id on a one-shot stream-jsonrpc exec, and a JSON-RPC
- * input session ignores the CLI's --auto/-m/-r, which would drop the tool fence.
- * So a fresh turn streams JSON-RPC and a continued turn (resume, answer, schema
- * repair) streams stream-json, where the flags still apply.
+ * input session (--input-format stream-jsonrpc) ignores --auto/-m/-r/--only-tools,
+ * which would drop the tool fence. So a fresh turn is a one-shot stream-jsonrpc
+ * exec and a continued turn (resume, answer, schema repair) streams stream-json;
+ * neither passes --input-format, so the fence flags apply to both.
+ *
+ * Fences: read-only is droid's default autonomy over READ_ONLY_TOOLS;
+ * run-commands is --auto medium over the same tools (commands run, no file
+ * tools, but the shell can still write); workspace-write is --auto medium over
+ * droid's default toolset. A schema-repair turn is always read-only.
  */
 export function buildDroidExecArgs(cwd, file, options = {}) {
   const resume = Boolean(options.resumeThreadId);
   const args = ["exec", "--output-format", resume ? "stream-json" : "stream-jsonrpc", "--cwd", cwd, "-f", file];
-  if (options.sandbox === "workspace-write" && !options.repair) args.push("--auto", "medium");
-  else args.push("--only-tools", "Read,LS,Grep,Glob,Execute");
+  const sandbox = options.repair ? "read-only" : options.sandbox;
+  const mcpSelectors = options.repair ? [] : (options.mcpTools ?? []).map(selector => `MCP:${normalizeMcpToolSelector(selector)}`);
+  if (sandbox === "workspace-write" || sandbox === "run-commands") args.push("--auto", "medium");
+  if (sandbox !== "workspace-write") args.push("--only-tools", [...READ_ONLY_TOOLS, ...mcpSelectors].join(","));
+  else if (mcpSelectors.length) args.push("--add-tools", mcpSelectors.join(","));
   if (options.model) args.push("-m", options.model);
   if (options.effort) args.push("-r", options.effort);
   if (resume) args.push("--session-id", options.resumeThreadId);
