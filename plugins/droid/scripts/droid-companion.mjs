@@ -17,6 +17,7 @@ import {
     getSessionRuntimeStatus,
     importExternalAgentSession,
     interruptDroidTurn,
+    normalizeMcpToolSelector,
     parseStructuredOutput,
     readOutputSchema,
     runDroidTurn
@@ -80,8 +81,10 @@ const ROOT_DIR = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const REVIEW_SCHEMA = path.join(ROOT_DIR, "schemas", "review-output.schema.json");
 const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 240000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 2000;
-const WORKER_VALUE_OPTIONS = ["output-schema", "result-file", "notify-socket", "mcp-config", "profile", "name", "brief", "instructions", "preread", "worktree", "lock-cmd", "unlock-cmd", "fanout", "on-start", "on-progress", "on-stop-report", "on-end", "on-fail"];
-const WORKER_BOOLEAN_OPTIONS = ["persistent", "pause-and-ask"];
+const WORKER_VALUE_OPTIONS = ["output-schema", "result-file", "notify-socket", "mcp-config", "profile", "name", "brief", "instructions", "preread", "worktree", "lock-cmd", "unlock-cmd", "fanout", "on-start", "on-progress", "on-stop-report", "on-end", "on-fail", "mcp-tool"];
+const WORKER_BOOLEAN_OPTIONS = ["persistent", "pause-and-ask", "run-commands"];
+// Tool-fence options replay on resume like worker options but do not switch output to the structured envelope.
+const TOOL_FENCE_OPTIONS = ["run-commands", "mcp-tool"];
 const WORKER_PATH_OPTIONS = ["output-schema", "result-file", "notify-socket", "mcp-config", "brief", "instructions", "preread", "worktree"];
 // Per-turn input: the resumed thread already holds the previous slice's brief and preread.
 const PER_TURN_WORKER_OPTIONS = ["brief", "preread"];
@@ -108,6 +111,8 @@ function printUsage() {
       "Worker options: --output-schema <file> --result-file <file> --notify-socket <path>",
       "  --name <name> --persistent --pause-and-ask --brief <file> --instructions <file> --preread <file>",
       "  --worktree <path> --lock-cmd <command> --unlock-cmd <command>",
+      "Tool fence (task, review, adversarial-review): --run-commands runs commands at --auto medium with read-only tools (not with --write; workspace changes are reported as a violation)",
+      "  --mcp-tool <server[/tool]> (repeatable) enables MCP:<selector>; read-only jobs get no MCP tools otherwise",
       "Unsupported: --profile, --mcp-config, --fanout, live send steering, native transcript transfer.",
       "  --on-start|--on-progress|--on-stop-report|--on-end|--on-fail <command>",
       "Effort levels vary per model; `models` lists each model's supported levels.",
@@ -367,7 +372,7 @@ async function executeReviewRun(request) {
     validateNativeReviewRequest(target, focusText);
     const context = collectReviewContext(request.cwd, target);
     const result = await runDroidTurn(request.cwd, {
-      ...request, sandbox: "read-only",
+      ...request, sandbox: request.runCommands ? "run-commands" : "read-only",
       prompt: `Review code changes for correctness, regressions, security, and missing tests. Report actionable findings with file/line references, or explicitly say no material issues were found. Do not modify files.\nTarget: ${target.label}\n${context.collectionGuidance}\n${context.content}`
     });
     result.reviewText = result.finalMessage;
@@ -415,7 +420,7 @@ async function executeReviewRun(request) {
     ...request,
     prompt,
     model: request.model,
-    sandbox: "read-only",
+    sandbox: request.runCommands ? "run-commands" : "read-only",
     outputSchema: request.outputSchema ?? readOutputSchema(REVIEW_SCHEMA),
     onProgress: request.onProgress
   });
@@ -495,7 +500,7 @@ async function executeTaskRun(request) {
     defaultPrompt: resumeThreadId ? DEFAULT_CONTINUE_PROMPT : "",
     model: request.model,
     effort: request.effort,
-    sandbox: request.sandbox ?? (request.write ? "workspace-write" : "read-only"),
+    sandbox: request.sandbox ?? (request.write ? "workspace-write" : request.runCommands ? "run-commands" : "read-only"),
     onProgress: request.onProgress,
     persistThread: true,
     threadName: resumeThreadId ? null : request.name ?? buildPersistentTaskThreadName(request.prompt || DEFAULT_CONTINUE_PROMPT)
@@ -735,7 +740,7 @@ async function enqueueBackgroundTask(cwd, job, request) {
 async function handleReviewCommand(argv, config) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["base", "scope", "model", "cwd", "effort", ...WORKER_VALUE_OPTIONS],
-    repeatedOptions: ["instructions", "preread"],
+    repeatedOptions: ["instructions", "preread", "mcp-tool"],
     booleanOptions: ["json", "background", "wait", ...WORKER_BOOLEAN_OPTIONS],
     aliasMap: {
       m: "model"
@@ -823,6 +828,8 @@ async function prepareWorkerOptions(cwd, options) {
   if (options["lock-cmd"] && !options["unlock-cmd"]) throw new Error("--lock-cmd requires --unlock-cmd.");
   const outputSchema = options["output-schema"] ? readOutputSchema(path.resolve(cwd, options["output-schema"])) : null;
   if (options["output-schema"]) validateOutputSchema(outputSchema);
+  if (options.write && options["run-commands"]) throw new Error("Choose either --write or --run-commands: --write already runs commands and edits files.");
+  const mcpTools = (options["mcp-tool"] ?? []).map(normalizeMcpToolSelector);
   return {
     ...runtime,
     ...context,
@@ -838,7 +845,9 @@ async function prepareWorkerOptions(cwd, options) {
     worktree: options.worktree ? cwd : null,
     lockCmd: options["lock-cmd"] ?? null,
     unlockCmd: options["unlock-cmd"] ?? null,
-    structured: [...WORKER_VALUE_OPTIONS, ...WORKER_BOOLEAN_OPTIONS].some(key => options[key] != null)
+    runCommands: Boolean(options["run-commands"]),
+    mcpTools,
+    structured: [...WORKER_VALUE_OPTIONS, ...WORKER_BOOLEAN_OPTIONS].some(key => !TOOL_FENCE_OPTIONS.includes(key) && options[key] != null)
   };
 }
 
@@ -854,7 +863,7 @@ function reserveNamedJob(job) {
 async function handleTask(argv) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["model", "effort", "cwd", "prompt-file", ...WORKER_VALUE_OPTIONS],
-    repeatedOptions: ["instructions", "preread"],
+    repeatedOptions: ["instructions", "preread", "mcp-tool"],
     booleanOptions: ["json", "write", "resume-last", "resume", "fresh", "background", ...WORKER_BOOLEAN_OPTIONS],
     aliasMap: { m: "model" }
   });
@@ -1112,7 +1121,7 @@ function selectedSession(cwd, reference) {
 async function handleSessions(argv) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["cwd", "prompt-file", "model", "effort", ...WORKER_VALUE_OPTIONS],
-    repeatedOptions: ["instructions", "preread"],
+    repeatedOptions: ["instructions", "preread", "mcp-tool"],
     booleanOptions: ["json", "background", "write", ...WORKER_BOOLEAN_OPTIONS],
     aliasMap: { m: "model" }
   });

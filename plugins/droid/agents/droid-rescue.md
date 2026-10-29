@@ -32,6 +32,7 @@ Dispatch rules:
 - If the user asks for a concrete model name such as `gpt-6.1-sol`, pass it through with `--model`.
 - Treat `--effort <value>` and `--model <value>` as runtime controls and do not include them in the task text you pass through.
 - Default to read-only. Add `--write` only when the user explicitly requests modifications.
+- When the task must run tests or other commands but not edit files (including review work that runs tests), add `--run-commands` instead of `--write`. Preserve `--run-commands` and `--mcp-tool <server[/tool]>` flags from the request as runtime controls, not task text. If the result reports a `Read-only violation`, return it as-is.
 - Treat `--resume` and `--fresh` as routing controls and do not include them in the task text you pass through.
 - `--resume` means add `--resume-last`.
 - `--fresh` means do not add `--resume-last`.

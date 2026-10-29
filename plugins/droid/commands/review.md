@@ -1,6 +1,6 @@
 ---
 description: Run a Droid code review against local git state
-argument-hint: '[--wait|--background] [--base <ref>] [--scope auto|working-tree|branch]'
+argument-hint: '[--wait|--background] [--run-commands] [--mcp-tool <server[/tool]>] [--base <ref>] [--scope auto|working-tree|branch]'
 disable-model-invocation: true
 allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 ---
@@ -36,6 +36,7 @@ Argument handling:
 - Do not strip `--wait` or `--background` yourself.
 - Do not add extra review instructions or rewrite the user's intent.
 - The companion script accepts `--wait` and `--background`. `--background` detaches a worker exactly as `task --background` does and returns a job id; see the background flow below. Collecting that job is not optional.
+- `--run-commands` lets Droid run tests and other commands during the review (medium autonomy, no file-editing tools), and `--mcp-tool <server[/tool]>` enables one MCP server or tool. Pass them through only when the user supplied them.
 - `/droid:review` is standard review only. It does not support staged-only review, unstaged-only review, or extra focus text.
 - If the user needs custom review instructions or more adversarial framing, they should use `/droid:adversarial-review`.
 

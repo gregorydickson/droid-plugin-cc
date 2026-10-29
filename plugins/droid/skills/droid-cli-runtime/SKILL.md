@@ -21,6 +21,7 @@ Execution rules:
 - Leave `--effort` unset unless the user explicitly requests a specific effort.
 - Leave model unset by default. Add `--model` only when the user explicitly asks for one.
 - Default to read-only. Add `--write` only when the user explicitly requests modifications.
+- If the task needs tests or other non-read-only commands but no edits, add `--run-commands` instead of `--write`. Preserve `--run-commands` and any `--mcp-tool <server[/tool]>` flags from the forwarded request.
 
 Command selection:
 - Use exactly one `task` invocation per rescue handoff.
@@ -40,6 +41,6 @@ Safety rules:
 - Return the stdout of the `task` command exactly as-is.
 - If the Bash call fails or Droid cannot be invoked, report the error in one line.
 
-Runtime mapping: read-only jobs omit `--auto` and restrict tools to `Read,LS,Grep,Glob,Execute`. `--write` maps to `droid exec --auto medium`, which permits local development operations beyond file edits. `--model` maps to `-m`, `--effort` maps to `-r`; model IDs pass through without aliases. Without the flags, `DROID_DEFAULT_MODEL` and `DROID_DEFAULT_EFFORT` apply to task, review and worker runs; resumed sessions keep their stored model and effort unless overridden. `--resume-last` uses the session ID stored with the previous job as `--session-id`. No settings files are changed. Each job owns one process group; cancellation terminates that group.
+Runtime mapping: read-only jobs omit `--auto` and restrict tools to `Read,LS,Grep,Glob,Execute`. `--write` maps to `droid exec --auto medium`, which permits local development operations beyond file edits. `--run-commands` (task, review, adversarial-review; not with `--write`) maps to `--auto medium --only-tools Read,LS,Grep,Glob,Execute`: medium-risk commands such as test runners run and no file-editing tools are offered, but a shell command can still write, so any workspace change is reported as `readOnlyViolation` in the result. `--mcp-tool SERVER[/TOOL]` (repeatable) adds `MCP:<selector>` to `--only-tools` for read-only and `--run-commands` jobs, or to `--add-tools` for `--write` jobs; without it, read-only jobs get no MCP tools. Selectors only reach servers configured in Droid, so they do nothing for jobs fenced with an empty `mcp.json`. Both flags carry over to resumed turns. `--model` maps to `-m`, `--effort` maps to `-r`; model IDs pass through without aliases. Without the flags, `DROID_DEFAULT_MODEL` and `DROID_DEFAULT_EFFORT` apply to task, review and worker runs; resumed sessions keep their stored model and effort unless overridden. `--resume-last` uses the session ID stored with the previous job as `--session-id`. No settings files are changed. Each job owns one process group; cancellation terminates that group.
 
 Verified on Droid 0.238.0: without `--auto`, read-only autonomy allows `git log` and `git show HEAD:a.txt` through Execute. `touch b.txt` aborts the whole run with "Exec ended early: insufficient permission to proceed" and writes nothing. Repair turns use this same fence. `--auto medium` is an autonomy policy, not a filesystem sandbox; fence writes in the forwarded prompt and check changedFiles.

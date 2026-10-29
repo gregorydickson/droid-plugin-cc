@@ -1,3 +1,5 @@
+import { formatReadOnlyViolation } from "./job-results.mjs";
+
 function severityRank(severity) {
   switch (severity) {
     case "critical":
@@ -139,6 +141,10 @@ function pushJobDetails(lines, job, options = {}) {
   }
   if (job.phase) {
     lines.push(`  Phase: ${job.phase}`);
+  }
+  const violation = formatReadOnlyViolation(job.readOnlyViolation);
+  if (violation) {
+    lines.push(`  ${violation}`);
   }
   if (options.showElapsed && job.elapsed) {
     lines.push(`  Elapsed: ${job.elapsed}`);
@@ -409,9 +415,11 @@ export function renderJobStatusReport(job) {
 }
 
 export function renderStoredJobResult(job, storedJob) {
-  const output = renderStoredJobBody(job, storedJob);
+  const body = renderStoredJobBody(job, storedJob);
   const usage = formatUsage(storedJob?.usage ?? storedJob?.result?.usage ?? job.usage);
-  return usage ? `${output}\nUsage: ${usage}\n` : output;
+  const output = usage ? `${body}\nUsage: ${usage}\n` : body;
+  const violation = formatReadOnlyViolation(storedJob?.readOnlyViolation ?? job.readOnlyViolation);
+  return violation ? `${output}\n${violation}\n` : output;
 }
 
 function renderStoredJobBody(job, storedJob) {

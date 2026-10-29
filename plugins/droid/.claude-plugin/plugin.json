@@ -1,6 +1,6 @@
 {
   "name": "droid",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Use Droid from Claude Code to review code or delegate tasks.",
   "author": {
     "name": "gregorydickson"

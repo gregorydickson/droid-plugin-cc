@@ -1,6 +1,6 @@
 ---
 description: Run a Droid review that challenges the implementation approach and design choices
-argument-hint: '[--wait|--background] [--base <ref>] [--scope auto|working-tree|branch] [focus ...]'
+argument-hint: '[--wait|--background] [--run-commands] [--mcp-tool <server[/tool]>] [--base <ref>] [--scope auto|working-tree|branch] [focus ...]'
 disable-model-invocation: true
 allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 ---
@@ -39,6 +39,7 @@ Argument handling:
 - Do not strip `--wait` or `--background` yourself.
 - Do not weaken the adversarial framing or rewrite the user's focus text.
 - The companion script accepts `--wait` and `--background`. `--background` detaches a worker exactly as `task --background` does and returns a job id; see the background flow below. Collecting that job is not optional.
+- `--run-commands` lets Droid run tests and other commands during the review (medium autonomy, no file-editing tools), and `--mcp-tool <server[/tool]>` enables one MCP server or tool. Pass them through only when the user supplied them.
 - `/droid:adversarial-review` uses the same review target selection as `/droid:review`.
 - It supports working-tree review, branch review, and `--base <ref>`.
 - It does not support `--scope staged` or `--scope unstaged`.
