@@ -117,7 +117,7 @@ function runStopReview(cwd, input = {}) {
   let result;
   try {
     fs.writeFileSync(promptFile, prompt, { mode: 0o600 });
-    result = spawnSync(process.execPath, [scriptPath, "task", "--json", "--prompt-file", promptFile], {
+    result = spawnSync(process.execPath, [scriptPath, "task", "--json", "--no-web", "--prompt-file", promptFile], {
       cwd,
       env: childEnv,
       encoding: "utf8",

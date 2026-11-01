@@ -104,7 +104,7 @@ function repo(behavior = "review-ok") {
   const env = buildEnv(binDir);
   const cli = (...args) => run("node", [SCRIPT, ...args], { cwd, env });
   const execArgs = () => JSON.parse(fs.readFileSync(path.join(binDir, "fake-droid-state.json"), "utf8")).threadRequests.map(request => request.args);
-  return { cwd, cli, execArgs };
+  return { cwd, binDir, env, cli, execArgs };
 }
 
 function backgroundResult(ctx, ...args) {
@@ -173,4 +173,82 @@ test("no violation is flagged when a --run-commands job leaves files alone, or f
     assert.equal(payload.readOnlyViolation, undefined, args.join(" "));
     assert.doesNotMatch(text, /Read-only violation/, args.join(" "));
   }
+});
+
+const OPT_OUTS = [
+  { flags: ["--no-web"], dropped: WEB_TOOLS },
+  { flags: ["--no-subagents"], dropped: SUBAGENT_TOOLS },
+  { flags: ["--no-web", "--no-subagents"], dropped: [...WEB_TOOLS, ...SUBAGENT_TOOLS] },
+];
+const expectedReadOnly = dropped => new Set([...READ_ONLY_TOOLS.filter(tool => !dropped.includes(tool)), "MCP:github"]);
+
+test("buildDroidExecArgs drops exactly the opted-out tool groups and keeps MCP selectors", () => {
+  for (const { dropped } of OPT_OUTS) {
+    const flagsFor = { noWeb: WEB_TOOLS.every(tool => dropped.includes(tool)), noSubagents: SUBAGENT_TOOLS.every(tool => dropped.includes(tool)) };
+    for (const resumeThreadId of [undefined, "session-1"]) {
+      const args = buildDroidExecArgs("/repo", "/p.txt", { sandbox: "read-only", resumeThreadId, mcpTools: ["github"], ...flagsFor });
+      assert.deepEqual(toolSet(args, "--only-tools"), expectedReadOnly(dropped));
+    }
+  }
+  for (const tool of RUN_COMMANDS_TOOLS) assert.ok(toolSet(buildDroidExecArgs("/repo", "/p.txt", { sandbox: "read-only", noWeb: true, noSubagents: true }), "--only-tools").has(tool), tool);
+});
+
+for (const { flags, dropped } of OPT_OUTS) {
+  for (const command of [["task"], ["review"], ["adversarial-review"]]) {
+    test(`${command[0]} ${flags.join(" ")} drops exactly ${dropped.join("/")} from --only-tools`, () => {
+      const ctx = repo();
+      const result = ctx.cli(...command, ...flags, "--mcp-tool", "github", ...(command[0] === "task" ? ["look around"] : []));
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(toolSet(ctx.execArgs()[0], "--only-tools"), expectedReadOnly(dropped));
+    });
+  }
+
+  test(`${flags.join(" ")} carries over to a resumed task turn and keeps the plain task payload`, () => {
+    const ctx = repo();
+    const plain = ctx.cli("task", "--json", "first");
+    assert.equal(plain.status, 0, plain.stderr);
+    const launched = ctx.cli("task", ...flags, "--mcp-tool", "github", "--json", "first");
+    assert.equal(launched.status, 0, launched.stderr);
+    assert.deepEqual(Object.keys(JSON.parse(launched.stdout)).sort(), Object.keys(JSON.parse(plain.stdout)).sort());
+    const resumed = ctx.cli("task", "--resume-last", "follow up");
+    assert.equal(resumed.status, 0, resumed.stderr);
+    const [, first, second] = ctx.execArgs();
+    assert.ok(second.includes("--session-id"));
+    for (const args of [first, second]) assert.deepEqual(toolSet(args, "--only-tools"), expectedReadOnly(dropped));
+  });
+}
+
+test("a read-only job under a droid-lock.sh binary is not filtered, and --write rejects the opt-outs", () => {
+  const ctx = repo();
+  const binDir = makeTempDir();
+  installFakeDroid(binDir);
+  const lock = path.join(binDir, "droid-lock.sh");
+  fs.copyFileSync(path.join(binDir, "droid.cjs"), lock);
+  fs.chmodSync(lock, 0o755);
+  const env = { ...buildEnv(binDir), DROID_BINARY: lock };
+  const result = run("node", [SCRIPT, "task", "look around"], { cwd: ctx.cwd, env });
+  assert.equal(result.status, 0, result.stderr);
+  const recorded = JSON.parse(fs.readFileSync(path.join(binDir, "fake-droid-state.json"), "utf8")).threadRequests[0].args;
+  assert.deepEqual(new Set(toolList(recorded, "--only-tools")), new Set(READ_ONLY_TOOLS));
+
+  for (const flagName of ["--no-web", "--no-subagents"]) {
+    const rejected = ctx.cli("task", "--write", flagName, "do it");
+    assert.equal(rejected.status, 1, flagName);
+    assert.match(rejected.stderr, /--no-web and --no-subagents apply to read-only jobs; --write uses Droid's default toolset\./);
+  }
+  assert.throws(() => ctx.execArgs(), /ENOENT/, "droid never ran");
+});
+
+test("the stop-review hook runs its task without the web tools", () => {
+  const ctx = repo();
+  assert.equal(ctx.cli("setup", "--enable-review-gate", "--json").status, 0);
+  const hook = run("node", [path.join(path.dirname(SCRIPT), "stop-review-gate-hook.mjs")], {
+    cwd: ctx.cwd,
+    env: ctx.env,
+    input: JSON.stringify({ cwd: ctx.cwd, session_id: "sess-fence", last_assistant_message: "done" })
+  });
+  assert.equal(hook.status, 0, hook.stderr);
+  const tools = toolSet(ctx.execArgs()[0], "--only-tools");
+  for (const tool of WEB_TOOLS) assert.ok(!tools.has(tool), tool);
+  for (const tool of SUBAGENT_TOOLS) assert.ok(tools.has(tool), tool);
 });

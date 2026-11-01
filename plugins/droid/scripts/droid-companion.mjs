@@ -86,9 +86,9 @@ const REVIEW_SCHEMA = path.join(ROOT_DIR, "schemas", "review-output.schema.json"
 const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 240000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 2000;
 const WORKER_VALUE_OPTIONS = ["output-schema", "result-file", "notify-socket", "mcp-config", "profile", "name", "brief", "instructions", "preread", "worktree", "lock-cmd", "unlock-cmd", "fanout", "on-start", "on-progress", "on-stop-report", "on-end", "on-fail", "mcp-tool"];
-const WORKER_BOOLEAN_OPTIONS = ["persistent", "pause-and-ask", "run-commands"];
+const WORKER_BOOLEAN_OPTIONS = ["persistent", "pause-and-ask", "run-commands", "no-web", "no-subagents"];
 // Tool-fence options replay on resume like worker options but do not switch output to the structured envelope.
-const TOOL_FENCE_OPTIONS = ["run-commands", "mcp-tool"];
+const TOOL_FENCE_OPTIONS = ["run-commands", "mcp-tool", "no-web", "no-subagents"];
 const WORKER_PATH_OPTIONS = ["output-schema", "result-file", "notify-socket", "mcp-config", "brief", "instructions", "preread", "worktree"];
 // Per-turn input: the resumed thread already holds the previous slice's brief and preread.
 const PER_TURN_WORKER_OPTIONS = ["brief", "preread"];
@@ -120,6 +120,7 @@ function printUsage() {
       "  --worktree <path> --lock-cmd <command> --unlock-cmd <command>",
       "Tool fence (task, review, adversarial-review): --run-commands runs commands at --auto medium with read-only tools (not with --write; workspace changes are reported as a violation)",
       "  --mcp-tool <server[/tool]> (repeatable) enables MCP:<selector>; read-only jobs get no MCP tools otherwise",
+      "  --no-web / --no-subagents drop the web tools / the subagent tools from a read-only job (not with --write)",
       "Unsupported: --profile, --mcp-config, --fanout, live send steering, native transcript transfer.",
       "  --on-start|--on-progress|--on-stop-report|--on-end|--on-fail <command>",
       "Effort levels vary per model; `models` lists each model's supported levels.",
@@ -876,6 +877,7 @@ async function prepareWorkerOptions(cwd, options) {
   const outputSchema = options["output-schema"] ? readOutputSchema(path.resolve(cwd, options["output-schema"])) : null;
   if (options["output-schema"]) validateOutputSchema(outputSchema);
   if (options.write && options["run-commands"]) throw new Error("Choose either --write or --run-commands: --write already runs commands and edits files.");
+  if (options.write && (options["no-web"] || options["no-subagents"])) throw new Error("--no-web and --no-subagents apply to read-only jobs; --write uses Droid's default toolset.");
   const mcpTools = (options["mcp-tool"] ?? []).map(normalizeMcpToolSelector);
   return {
     ...runtime,
@@ -894,6 +896,8 @@ async function prepareWorkerOptions(cwd, options) {
     unlockCmd: options["unlock-cmd"] ?? null,
     runCommands: Boolean(options["run-commands"]),
     mcpTools,
+    noWeb: Boolean(options["no-web"]),
+    noSubagents: Boolean(options["no-subagents"]),
     structured: [...WORKER_VALUE_OPTIONS, ...WORKER_BOOLEAN_OPTIONS].some(key => !TOOL_FENCE_OPTIONS.includes(key) && options[key] != null)
   };
 }

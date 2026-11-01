@@ -145,6 +145,12 @@ export const RUN_COMMANDS_TOOLS = Object.freeze(["Read", "LS", "Grep", "Glob", "
 export const REPAIR_TOOLS = RUN_COMMANDS_TOOLS;
 export const READ_ONLY_TOOLS = Object.freeze([...RUN_COMMANDS_TOOLS, ...WEB_TOOLS, "Skill", "ToolSearch", "TodoWrite", ...SUBAGENT_TOOLS]);
 
+/** READ_ONLY_TOOLS minus exactly the groups a job opted out of. */
+function readOnlyTools({ noWeb, noSubagents }) {
+  const dropped = new Set([...(noWeb ? WEB_TOOLS : []), ...(noSubagents ? SUBAGENT_TOOLS : [])]);
+  return READ_ONLY_TOOLS.filter(tool => !dropped.has(tool));
+}
+
 /** `server` or `server/tool` (percent-encoded segments), optionally written with droid's `MCP:` prefix. */
 export function normalizeMcpToolSelector(value) {
   const selector = String(value ?? "").replace(/^MCP:/, "");
@@ -162,7 +168,8 @@ export function normalizeMcpToolSelector(value) {
  * neither passes --input-format, so the fence flags apply to both.
  *
  * Fences: read-only is droid's default autonomy over READ_ONLY_TOOLS (the
- * wide toolbox: web, skills, subagents) plus any MCP selectors; run-commands is
+ * wide toolbox: web, skills, subagents, minus whatever --no-web/--no-subagents
+ * drop) plus any MCP selectors; run-commands is
  * --auto medium over RUN_COMMANDS_TOOLS plus MCP selectors (commands run, no
  * file tools, but the shell can still write). Run-commands stays on the narrow
  * five because the lane wrapper refuses any run-commands --only-tools member
@@ -176,7 +183,7 @@ export function buildDroidExecArgs(cwd, file, options = {}) {
   const sandbox = options.repair ? "read-only" : options.sandbox;
   const mcpSelectors = options.repair ? [] : (options.mcpTools ?? []).map(selector => `MCP:${normalizeMcpToolSelector(selector)}`);
   if (sandbox === "workspace-write" || sandbox === "run-commands") args.push("--auto", "medium");
-  if (sandbox !== "workspace-write") args.push("--only-tools", [...(options.repair ? REPAIR_TOOLS : sandbox === "run-commands" ? RUN_COMMANDS_TOOLS : READ_ONLY_TOOLS), ...mcpSelectors].join(","));
+  if (sandbox !== "workspace-write") args.push("--only-tools", [...(options.repair ? REPAIR_TOOLS : sandbox === "run-commands" ? RUN_COMMANDS_TOOLS : readOnlyTools(options)), ...mcpSelectors].join(","));
   else if (mcpSelectors.length) args.push("--add-tools", mcpSelectors.join(","));
   if (options.model) args.push("-m", options.model);
   if (options.effort) args.push("-r", options.effort);
