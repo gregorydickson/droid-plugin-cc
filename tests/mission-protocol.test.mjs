@@ -49,29 +49,32 @@ function snapshot() {
   });
 }
 
-// Processes the mission owns: the exec's descendants, any process naming the
-// mission session id, and any Droid or factoryd binary started after the baseline.
-function missionProcesses(procs, rootPid, baseline, sessionId) {
-  const tree = new Set([rootPid]);
+const isDroidBinary = proc => /(^|\/)(droid|factoryd)$/.test(proc.command.split(" ")[0]);
+
+// The pids in `seeds` plus every process descended from them.
+function withDescendants(procs, seeds) {
+  const tree = new Set(seeds);
   for (let grew = true; grew;) {
     grew = false;
     for (const proc of procs) if (!tree.has(proc.pid) && tree.has(proc.ppid)) { tree.add(proc.pid); grew = true; }
   }
+  return tree;
+}
+
+// Processes the mission owns: the exec's descendants, any process naming the
+// mission session id, and any Droid or factoryd binary started after the baseline.
+function missionProcesses(procs, rootPid, baseline, sessionId) {
+  const tree = withDescendants(procs, [rootPid]);
   return procs.filter(proc => tree.has(proc.pid) || !baseline.has(proc.pid) && (
     (sessionId && proc.command.includes(sessionId)) || isDroidBinary(proc)));
 }
-
-const isDroidBinary = proc => /(^|\/)(droid|factoryd)$/.test(proc.command.split(" ")[0]);
 
 // Worker processes: a Droid or factoryd binary other than the exec itself, or a
 // process naming the mission session id, plus everything they spawned. MCP
 // servers and tool commands the orchestrator runs are not workers.
 function workerProcesses(lineage, rootPid) {
-  const workers = new Set(lineage.filter(proc => proc.pid !== rootPid && (proc.hasSessionId || isDroidBinary(proc))).map(proc => proc.pid));
-  for (let grew = true; grew;) {
-    grew = false;
-    for (const proc of lineage) if (!workers.has(proc.pid) && workers.has(proc.ppid)) { workers.add(proc.pid); grew = true; }
-  }
+  const seeds = lineage.filter(proc => proc.pid !== rootPid && (proc.hasSessionId || isDroidBinary(proc))).map(proc => proc.pid);
+  const workers = withDescendants(lineage, seeds);
   return lineage.filter(proc => workers.has(proc.pid));
 }
 
