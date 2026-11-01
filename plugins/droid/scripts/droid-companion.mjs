@@ -212,7 +212,11 @@ async function buildSetupReport(cwd, actionsTaken = []) {
   } else if (!Object.values(droidCapabilities(droidVersion)).every(Boolean)) {
     nextSteps.push(`Droid CLI ${droidVersion} is below ${DROID_FEATURE_FLOOR}; upgrade to use tags, mission, fork, spec and steering.`);
   }
-  if (droidStatus.available) nextSteps.push("Authentication is checked during execution. Use /login in Droid or FACTORY_API_KEY if needed.");
+  if (droidStatus.available && !authStatus.verified) nextSteps.push("Authentication is checked during execution. Use /login in Droid or FACTORY_API_KEY if needed.");
+  if (authStatus.verified && authStatus.loggedIn === false) nextSteps.push("Droid is not logged in on this host. Use /login in Droid or FACTORY_API_KEY.");
+  for (const warning of authStatus.warnings ?? []) {
+    nextSteps.push(`Droid doctor ${warning.status} [${warning.id}]: ${warning.detail}${warning.remediation ? ` ${warning.remediation}` : ""}`);
+  }
   if (!config.stopReviewGate) {
     nextSteps.push("Optional: run `/droid:setup --enable-review-gate` to require a fresh review before stop.");
   }

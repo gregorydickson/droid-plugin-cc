@@ -68,9 +68,69 @@ export function getDroidExecHelp(cwd) {
 export function getSessionRuntimeStatus() {
   return { mode: "direct", label: "per-job process", detail: "Each job runs an isolated droid exec child; sessions resume from the stored session ID.", endpoint: null };
 }
-export async function getDroidAuthStatus(cwd) {
+export const DROID_DOCTOR_CHECKS = "config,auth,connectivity";
+const DOCTOR_TIMEOUT_DEFAULT_MS = 15000;
+
+function doctorTimeoutMs(env) {
+  const parsed = Number(env.DROID_DOCTOR_TIMEOUT_MS);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DOCTOR_TIMEOUT_DEFAULT_MS;
+}
+
+/** Runs `droid doctor --json` in its own process group so a hung connectivity check dies with its children. */
+function runDoctor(cwd, env = process.env) {
+  const { command, prefix } = invocation(env);
+  const timeoutMs = doctorTimeoutMs(env);
+  return new Promise(resolve => {
+    let stdout = "";
+    let timer = null;
+    let settled = false;
+    const finish = outcome => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(outcome);
+    };
+    const child = spawn(command, [...prefix, "doctor", "--json", "--checks", DROID_DOCTOR_CHECKS], { cwd, env, stdio: ["ignore", "pipe", "ignore"], detached: process.platform !== "win32", windowsHide: true });
+    timer = setTimeout(() => {
+      try { terminateProcessTree(child.pid, { signal: "SIGKILL" }); } catch { /* already gone */ }
+      finish({ reason: `timed out after ${timeoutMs} ms` });
+    }, timeoutMs);
+    child.stdout.on("data", chunk => { stdout += chunk; });
+    child.on("error", error => finish({ reason: error.message }));
+    child.on("close", (status, signal) => finish(status === 0 ? { stdout } : { reason: `exit ${status ?? signal}` }));
+  });
+}
+
+function parseDoctor(stdout) {
+  try {
+    const parsed = JSON.parse(stdout);
+    return Array.isArray(parsed?.results) ? parsed.results : null;
+  } catch { return null; }
+}
+
+/** Reports the host's Droid login and health. Doctor failure never throws: the shape degrades with a `doctor` warning. */
+export async function getDroidAuthStatus(cwd, env = process.env) {
   const availability = getDroidAvailability(cwd);
-  return { available: availability.available, loggedIn: null, verified: false, source: "exec", detail: "Authentication is checked on the first run. Use /login in Droid or FACTORY_API_KEY.", provider: "Factory" };
+  const degraded = reason => ({
+    available: availability.available, loggedIn: null, verified: false, source: "exec", label: "first run",
+    detail: "Authentication is checked on the first run. Use /login in Droid or FACTORY_API_KEY.", provider: "Factory",
+    warnings: availability.available ? [{ id: "doctor", status: "warn", detail: `droid doctor unavailable: ${reason}`, remediation: null }] : []
+  });
+  if (!availability.available) return degraded("droid not found");
+  const outcome = await runDoctor(cwd, env);
+  if (outcome.reason) return degraded(outcome.reason);
+  const results = parseDoctor(outcome.stdout);
+  if (!results) return degraded("invalid JSON");
+  const authResults = results.filter(result => String(result?.id).startsWith("auth."));
+  const verified = authResults.length > 0;
+  const loggedIn = verified ? authResults.every(result => result.status === "pass") : null;
+  const warnings = results.filter(result => result?.status === "warn" || result?.status === "fail")
+    .map(({ id, status, detail, remediation }) => ({ id, status, detail, remediation: remediation ?? null }));
+  const summary = !verified ? "no auth check reported" : loggedIn ? "logged in" : "not logged in";
+  return {
+    available: true, loggedIn, verified, warnings, source: "doctor", label: "host Droid health", provider: "Factory",
+    detail: `host Droid health: ${summary} (droid doctor, ${warnings.length === 0 ? "no warnings" : "see warnings"}). A lane runs against its own home, so this describes the host.`
+  };
 }
 /** Stored turn IDs include the process birth time and group; legacy PIDs are untrusted. */
 function processIdentity(pid) {

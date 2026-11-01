@@ -10,6 +10,7 @@ export const SESSION_USAGE = [
   { inputTokens: 9, outputTokens: 216, cacheReadTokens: 0, cacheCreationTokens: 5322, thinkingTokens: 158, factoryCredits: 3097 },
   { inputTokens: 18, outputTokens: 275, cacheReadTokens: 0, cacheCreationTokens: 10760, thinkingTokens: 189, factoryCredits: 5938 }
 ];
+export const DOCTOR_FIXTURE = fileURLToPath(new URL("./fixtures/droid-doctor-1.1.0.json", import.meta.url));
 export const HELP_FIXTURE = fileURLToPath(new URL("./fixtures/droid-exec-help-0.238.0.txt", import.meta.url));
 
 export function installFakeDroid(binDir, behavior = "review-ok", worker = false) {
@@ -25,6 +26,20 @@ const args = process.argv.slice(2);
 const arg = flag => args[args.indexOf(flag) + 1];
 if (args[0] === "--version") { console.log("droid-cli test " + (process.env.FAKE_DROID_VERSION ?? "1.1.0")); process.exit(0); }
 if (args[0] === "exec" && args.includes("--help")) { process.stdout.write(fs.readFileSync(${JSON.stringify(HELP_FIXTURE)}, "utf8")); process.exit(0); }
+if (args[0] === "doctor") {
+  const mode = process.env.FAKE_DROID_DOCTOR ?? "ok";
+  if (mode === "hang") { setInterval(() => {}, 1000); return; }
+  if (mode === "fail-exit") { process.stderr.write("doctor crashed\\n"); process.exit(1); }
+  else if (mode === "invalid") { process.stdout.write("not json {"); process.exit(0); }
+  else {
+    const report = JSON.parse(fs.readFileSync(${JSON.stringify(DOCTOR_FIXTURE)}, "utf8"));
+    if (mode === "ok") report.results = report.results.filter(result => result.status === "pass");
+    if (mode === "no-auth") report.results = report.results.filter(result => !result.id.startsWith("auth."));
+    if (mode === "auth-fail") report.results = report.results.map(result => result.id === "auth.verify" ? { ...result, status: "fail", detail: "token rejected", remediation: "Run /login" } : result);
+    process.stdout.write(JSON.stringify(report));
+    process.exit(0);
+  }
+}
 const FORMAT = arg("--output-format");
 if (args[0] !== "exec" || !["stream-jsonrpc", "stream-json"].includes(FORMAT)) process.exit(2);
 // The real CLI's flag check (droid 0.238.0), so a bad argv fails here as it does live.
