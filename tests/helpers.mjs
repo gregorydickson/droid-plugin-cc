@@ -33,3 +33,25 @@ export function initGitRepo(cwd) {
   run("git", ["config", "commit.gpgsign", "false"], { cwd });
   run("git", ["config", "tag.gpgsign", "false"], { cwd });
 }
+
+export const SMOKE_MODEL = process.env.DROID_SMOKE_MODEL ?? "glm-5.3";
+
+const FACTORY_AUTH_FILES = ["auth.v2.file", "auth.v2.key", "auth.v2.loginkeychain"];
+
+// Live-smoke env. `fenced` gives droid a Factory home with only the real login
+// (symlinked) and an empty mcp.json, so it starts no MCP server and reads no
+// settings.json default model.
+export function smokeEnv({ fenced = false } = {}) {
+  const env = { ...process.env, CLAUDE_PLUGIN_DATA: makeTempDir("droid-smoke-data-") };
+  if (!fenced) return env;
+  const realFactory = path.join(os.homedir(), ".factory");
+  const links = FACTORY_AUTH_FILES.filter(name => fs.existsSync(path.join(realFactory, name)));
+  if (links.length === 0) throw new Error("no Factory login found under ~/.factory");
+  const home = makeTempDir("droid-smoke-home-");
+  const factoryDir = path.join(home, ".factory");
+  fs.mkdirSync(factoryDir, { recursive: true });
+  for (const name of links) fs.symlinkSync(path.join(realFactory, name), path.join(factoryDir, name));
+  fs.writeFileSync(path.join(factoryDir, "mcp.json"), '{"mcpServers":{}}\n');
+  env.FACTORY_HOME_OVERRIDE = home;
+  return env;
+}

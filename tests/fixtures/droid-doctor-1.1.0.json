@@ -1,0 +1,561 @@
+{
+  "generatedAt": "2026-11-01T16:46:12.351Z",
+  "timeoutMs": 10000,
+  "ok": true,
+  "results": [
+    {
+      "id": "configuration.skill-collision",
+      "category": "configuration",
+      "label": "~/.agents/skills/deep-pr-review/SKILL.md",
+      "status": "warn",
+      "detail": "Skill name \"deep-pr-review\" is defined more than once at the same level; the copy from user (.factory) (~/.factory/skills/deep-pr-review/SKILL.md) wins and this one is ignored.",
+      "remediation": "Resolve or remove the conflicting skill definition.",
+      "data": {
+        "scope": "user (.agents)",
+        "path": "~/.agents/skills/deep-pr-review/SKILL.md"
+      },
+      "durationMs": 147
+    },
+    {
+      "id": "configuration.skill-collision",
+      "category": "configuration",
+      "label": "~/.agents/skills/pickle-prd/SKILL.md",
+      "status": "warn",
+      "detail": "Skill name \"pickle-prd\" is defined more than once at the same level; the copy from user (.factory) (~/.factory/skills/pickle-prd/SKILL.md) wins and this one is ignored.",
+      "remediation": "Resolve or remove the conflicting skill definition.",
+      "data": {
+        "scope": "user (.agents)",
+        "path": "~/.agents/skills/pickle-prd/SKILL.md"
+      },
+      "durationMs": 147
+    },
+    {
+      "id": "env.info",
+      "category": "environment",
+      "label": "Droid environment",
+      "status": "pass",
+      "detail": "v1.1.0 on darwin arm64 (bun 1.4.4)",
+      "data": {
+        "cliVersion": "1.1.0",
+        "platform": "darwin arm64",
+        "osRelease": "Darwin 25.3.0",
+        "runtime": "bun 1.4.4",
+        "deploymentEnv": "production",
+        "apiBaseUrl": "https://api.factory.ai",
+        "appBaseUrl": "https://app.factory.ai",
+        "factoryDir": "~/.factory",
+        "logsDir": "~/.factory/logs"
+      }
+    },
+    {
+      "id": "dns.factory-api",
+      "category": "connectivity",
+      "label": "DNS lookup api.factory.ai",
+      "data": {
+        "host": "api.factory.ai",
+        "step": "DNS"
+      },
+      "status": "pass",
+      "detail": "216.150.16.129, 216.150.1.129",
+      "durationMs": 47
+    },
+    {
+      "id": "tcp.factory-api",
+      "category": "connectivity",
+      "label": "TCP connect api.factory.ai:443",
+      "data": {
+        "host": "api.factory.ai",
+        "step": "TCP"
+      },
+      "status": "pass",
+      "durationMs": 75
+    },
+    {
+      "id": "tls.factory-api",
+      "category": "connectivity",
+      "label": "TLS handshake api.factory.ai",
+      "data": {
+        "host": "api.factory.ai",
+        "step": "TLS",
+        "protocol": "TLSv1.3",
+        "chain": [
+          "api.factory.ai ← YR1 / Let's Encrypt",
+          "YR1 ← Root YR / ISRG",
+          "Root YR ← ISRG Root X1 / Internet Security Research Group",
+          "ISRG Root X1 ← ISRG Root X1 / Internet Security Research Group"
+        ]
+      },
+      "status": "pass",
+      "detail": "TLSv1.3, issued by YR1 / Let's Encrypt",
+      "durationMs": 177
+    },
+    {
+      "id": "https.factory-api",
+      "category": "connectivity",
+      "label": "HTTPS request https://api.factory.ai/api/cli/whoami",
+      "data": {
+        "host": "api.factory.ai",
+        "step": "HTTPS",
+        "statusCode": 401
+      },
+      "status": "pass",
+      "detail": "HTTP 401",
+      "durationMs": 285
+    },
+    {
+      "id": "clock.skew",
+      "category": "connectivity",
+      "label": "System clock vs Factory API",
+      "status": "pass",
+      "detail": "0s skew"
+    },
+    {
+      "id": "dns.factory-api-eu",
+      "category": "connectivity",
+      "label": "DNS lookup api.eu.factory.ai",
+      "data": {
+        "host": "api.eu.factory.ai",
+        "step": "DNS"
+      },
+      "status": "pass",
+      "detail": "66.33.60.35, 76.76.21.123, 66.33.60.34, 76.76.21.164",
+      "durationMs": 46
+    },
+    {
+      "id": "tcp.factory-api-eu",
+      "category": "connectivity",
+      "label": "TCP connect api.eu.factory.ai:443",
+      "data": {
+        "host": "api.eu.factory.ai",
+        "step": "TCP"
+      },
+      "status": "pass",
+      "durationMs": 71
+    },
+    {
+      "id": "tls.factory-api-eu",
+      "category": "connectivity",
+      "label": "TLS handshake api.eu.factory.ai",
+      "data": {
+        "host": "api.eu.factory.ai",
+        "step": "TLS",
+        "protocol": "TLSv1.3",
+        "chain": [
+          "api.eu.factory.ai ← YR2 / Let's Encrypt",
+          "YR2 ← Root YR / ISRG",
+          "Root YR ← ISRG Root X1 / Internet Security Research Group",
+          "ISRG Root X1 ← ISRG Root X1 / Internet Security Research Group"
+        ]
+      },
+      "status": "pass",
+      "detail": "TLSv1.3, issued by YR2 / Let's Encrypt",
+      "durationMs": 184
+    },
+    {
+      "id": "https.factory-api-eu",
+      "category": "connectivity",
+      "label": "HTTPS request https://api.eu.factory.ai/api/cli/whoami",
+      "data": {
+        "host": "api.eu.factory.ai",
+        "step": "HTTPS",
+        "statusCode": 401
+      },
+      "status": "pass",
+      "detail": "HTTP 401",
+      "durationMs": 442
+    },
+    {
+      "id": "dns.factory-prem",
+      "category": "connectivity",
+      "label": "DNS lookup prem.factory.ai",
+      "data": {
+        "host": "prem.factory.ai",
+        "step": "DNS"
+      },
+      "status": "pass",
+      "detail": "216.150.1.1, 216.150.16.1",
+      "durationMs": 92
+    },
+    {
+      "id": "tcp.factory-prem",
+      "category": "connectivity",
+      "label": "TCP connect prem.factory.ai:443",
+      "data": {
+        "host": "prem.factory.ai",
+        "step": "TCP"
+      },
+      "status": "pass",
+      "durationMs": 36
+    },
+    {
+      "id": "tls.factory-prem",
+      "category": "connectivity",
+      "label": "TLS handshake prem.factory.ai",
+      "data": {
+        "host": "prem.factory.ai",
+        "step": "TLS",
+        "protocol": "TLSv1.3",
+        "chain": [
+          "prem.factory.ai ← YR1 / Let's Encrypt",
+          "YR1 ← Root YR / ISRG",
+          "Root YR ← ISRG Root X1 / Internet Security Research Group",
+          "ISRG Root X1 ← ISRG Root X1 / Internet Security Research Group"
+        ]
+      },
+      "status": "pass",
+      "detail": "TLSv1.3, issued by YR1 / Let's Encrypt",
+      "durationMs": 176
+    },
+    {
+      "id": "https.factory-prem",
+      "category": "connectivity",
+      "label": "HTTPS request https://prem.factory.ai/api/external/health/live",
+      "data": {
+        "host": "prem.factory.ai",
+        "step": "HTTPS",
+        "statusCode": 200
+      },
+      "status": "pass",
+      "detail": "HTTP 200",
+      "durationMs": 210
+    },
+    {
+      "id": "dns.factory-prem-eu",
+      "category": "connectivity",
+      "label": "DNS lookup prem.eu.factory.ai",
+      "data": {
+        "host": "prem.eu.factory.ai",
+        "step": "DNS"
+      },
+      "status": "pass",
+      "detail": "216.150.1.193, 216.150.16.193",
+      "durationMs": 94
+    },
+    {
+      "id": "tcp.factory-prem-eu",
+      "category": "connectivity",
+      "label": "TCP connect prem.eu.factory.ai:443",
+      "data": {
+        "host": "prem.eu.factory.ai",
+        "step": "TCP"
+      },
+      "status": "pass",
+      "durationMs": 124
+    },
+    {
+      "id": "tls.factory-prem-eu",
+      "category": "connectivity",
+      "label": "TLS handshake prem.eu.factory.ai",
+      "data": {
+        "host": "prem.eu.factory.ai",
+        "step": "TLS",
+        "protocol": "TLSv1.3",
+        "chain": [
+          "prem.eu.factory.ai ← YR2 / Let's Encrypt",
+          "YR2 ← Root YR / ISRG",
+          "Root YR ← ISRG Root X1 / Internet Security Research Group",
+          "ISRG Root X1 ← ISRG Root X1 / Internet Security Research Group"
+        ]
+      },
+      "status": "pass",
+      "detail": "TLSv1.3, issued by YR2 / Let's Encrypt",
+      "durationMs": 103
+    },
+    {
+      "id": "https.factory-prem-eu",
+      "category": "connectivity",
+      "label": "HTTPS request https://prem.eu.factory.ai/api/external/health/live",
+      "data": {
+        "host": "prem.eu.factory.ai",
+        "step": "HTTPS",
+        "statusCode": 200
+      },
+      "status": "pass",
+      "detail": "HTTP 200",
+      "durationMs": 270
+    },
+    {
+      "id": "dns.factory-app",
+      "category": "connectivity",
+      "label": "DNS lookup app.factory.ai",
+      "data": {
+        "host": "app.factory.ai",
+        "step": "DNS"
+      },
+      "status": "pass",
+      "detail": "66.33.60.35, 76.76.21.123, 66.33.60.34, 76.76.21.164",
+      "durationMs": 45
+    },
+    {
+      "id": "tcp.factory-app",
+      "category": "connectivity",
+      "label": "TCP connect app.factory.ai:443",
+      "data": {
+        "host": "app.factory.ai",
+        "step": "TCP"
+      },
+      "status": "pass",
+      "durationMs": 67
+    },
+    {
+      "id": "tls.factory-app",
+      "category": "connectivity",
+      "label": "TLS handshake app.factory.ai",
+      "data": {
+        "host": "app.factory.ai",
+        "step": "TLS",
+        "protocol": "TLSv1.3",
+        "chain": [
+          "app.factory.ai ← YR1 / Let's Encrypt",
+          "YR1 ← Root YR / ISRG",
+          "Root YR ← ISRG Root X1 / Internet Security Research Group",
+          "ISRG Root X1 ← ISRG Root X1 / Internet Security Research Group"
+        ]
+      },
+      "status": "pass",
+      "detail": "TLSv1.3, issued by YR1 / Let's Encrypt",
+      "durationMs": 189
+    },
+    {
+      "id": "https.factory-app",
+      "category": "connectivity",
+      "label": "HTTPS request https://app.factory.ai/",
+      "data": {
+        "host": "app.factory.ai",
+        "step": "HTTPS",
+        "statusCode": 200
+      },
+      "status": "pass",
+      "detail": "HTTP 200",
+      "durationMs": 152
+    },
+    {
+      "id": "dns.factory-downloads",
+      "category": "connectivity",
+      "label": "DNS lookup downloads.factory.ai",
+      "data": {
+        "host": "downloads.factory.ai",
+        "step": "DNS"
+      },
+      "status": "pass",
+      "detail": "2600:9000:24f9:6e00:1b:532d:1340:93a1, 2600:9000:24f9:4400:1b:532d:1340:93a1, 2600:9000:24f9:be00:1b:532d:1340:93a1, 2600:9000:24f9:5200:1b:532d:1340:93a1, 2600:9000:24f9:ac00:1b:532d:1340:93a1, 2600:9000:24f9:a800:1b:532d:1340:93a1, 2600:9000:24f9:e800:1b:532d:1340:93a1, 2600:9000:24f9:c00:1b:532d:1340:93a1, 108.157.150.6, 108.157.150.32, 108.157.150.43, 108.157.150.125",
+      "durationMs": 32
+    },
+    {
+      "id": "tcp.factory-downloads",
+      "category": "connectivity",
+      "label": "TCP connect downloads.factory.ai:443",
+      "data": {
+        "host": "downloads.factory.ai",
+        "step": "TCP"
+      },
+      "status": "pass",
+      "durationMs": 69
+    },
+    {
+      "id": "tls.factory-downloads",
+      "category": "connectivity",
+      "label": "TLS handshake downloads.factory.ai",
+      "data": {
+        "host": "downloads.factory.ai",
+        "step": "TLS",
+        "protocol": "TLSv1.3",
+        "chain": [
+          "*.factory.ai ← Amazon RSA 2048 M01 / Amazon",
+          "Amazon RSA 2048 M01 ← Amazon Root CA 1 / Amazon",
+          "Amazon Root CA 1 ← Starfield Services Root Certificate Authority - G2 / Starfield Technologies, Inc.",
+          "Starfield Services Root Certificate Authority - G2 ← Starfield Services Root Certificate Authority - G2 / Starfield Technologies, Inc."
+        ]
+      },
+      "status": "pass",
+      "detail": "TLSv1.3, issued by Amazon RSA 2048 M01 / Amazon",
+      "durationMs": 144
+    },
+    {
+      "id": "https.factory-downloads",
+      "category": "connectivity",
+      "label": "HTTPS request https://downloads.factory.ai/factory-cli/LATEST",
+      "data": {
+        "host": "downloads.factory.ai",
+        "step": "HTTPS",
+        "statusCode": 200
+      },
+      "status": "pass",
+      "detail": "HTTP 200",
+      "durationMs": 100
+    },
+    {
+      "id": "dns.factory-telemetry",
+      "category": "connectivity",
+      "label": "DNS lookup telemetry.factory.ai",
+      "data": {
+        "host": "telemetry.factory.ai",
+        "step": "DNS"
+      },
+      "status": "pass",
+      "detail": "2607:f8b0:4023:1017::79, 142.250.113.121",
+      "durationMs": 37
+    },
+    {
+      "id": "tcp.factory-telemetry",
+      "category": "connectivity",
+      "label": "TCP connect telemetry.factory.ai:443",
+      "data": {
+        "host": "telemetry.factory.ai",
+        "step": "TCP"
+      },
+      "status": "pass",
+      "durationMs": 69
+    },
+    {
+      "id": "tls.factory-telemetry",
+      "category": "connectivity",
+      "label": "TLS handshake telemetry.factory.ai",
+      "data": {
+        "host": "telemetry.factory.ai",
+        "step": "TLS",
+        "protocol": "TLSv1.3",
+        "chain": [
+          "telemetry.factory.ai ← WR3 / Google Trust Services",
+          "WR3 ← GTS Root R1 / Google Trust Services LLC",
+          "GTS Root R1 ← GlobalSign Root CA / GlobalSign nv-sa",
+          "GlobalSign Root CA ← GlobalSign Root CA / GlobalSign nv-sa"
+        ]
+      },
+      "status": "pass",
+      "detail": "TLSv1.3, issued by WR3 / Google Trust Services",
+      "durationMs": 145
+    },
+    {
+      "id": "https.factory-telemetry",
+      "category": "connectivity",
+      "label": "HTTPS request https://telemetry.factory.ai/",
+      "data": {
+        "host": "telemetry.factory.ai",
+        "step": "HTTPS",
+        "statusCode": 405
+      },
+      "status": "pass",
+      "detail": "HTTP 405",
+      "durationMs": 106
+    },
+    {
+      "id": "dns.workos",
+      "category": "connectivity",
+      "label": "DNS lookup api.workos.com",
+      "data": {
+        "host": "api.workos.com",
+        "step": "DNS"
+      },
+      "status": "pass",
+      "detail": "2606:4700:4407::6812:2974, 2606:4700:4408::ac40:928c, 104.18.41.116, 172.64.146.140",
+      "durationMs": 35
+    },
+    {
+      "id": "tcp.workos",
+      "category": "connectivity",
+      "label": "TCP connect api.workos.com:443",
+      "data": {
+        "host": "api.workos.com",
+        "step": "TCP"
+      },
+      "status": "pass",
+      "durationMs": 58
+    },
+    {
+      "id": "tls.workos",
+      "category": "connectivity",
+      "label": "TLS handshake api.workos.com",
+      "data": {
+        "host": "api.workos.com",
+        "step": "TLS",
+        "protocol": "TLSv1.3",
+        "chain": [
+          "workos.com ← WE1 / Google Trust Services",
+          "WE1 ← GTS Root R4 / Google Trust Services LLC",
+          "GTS Root R4 ← GlobalSign Root CA / GlobalSign nv-sa",
+          "GlobalSign Root CA ← GlobalSign Root CA / GlobalSign nv-sa"
+        ]
+      },
+      "status": "pass",
+      "detail": "TLSv1.3, issued by WE1 / Google Trust Services",
+      "durationMs": 145
+    },
+    {
+      "id": "https.workos",
+      "category": "connectivity",
+      "label": "HTTPS request https://api.workos.com/user_management",
+      "data": {
+        "host": "api.workos.com",
+        "step": "HTTPS",
+        "statusCode": 404
+      },
+      "status": "pass",
+      "detail": "HTTP 404",
+      "durationMs": 154
+    },
+    {
+      "id": "startup.whoami",
+      "label": "Authenticated user API",
+      "category": "connectivity",
+      "status": "pass",
+      "detail": "GET /api/cli/whoami: HTTP 200, JSON object received (reachability only)",
+      "durationMs": 501
+    },
+    {
+      "id": "startup.org",
+      "label": "Authenticated organization API",
+      "category": "connectivity",
+      "status": "pass",
+      "detail": "GET /api/cli/org: HTTP 200, JSON object received (reachability only)",
+      "durationMs": 406
+    },
+    {
+      "id": "startup.flags",
+      "label": "Feature flags API",
+      "category": "connectivity",
+      "status": "pass",
+      "detail": "GET /api/feature-flags: HTTP 200, JSON object received (reachability only)",
+      "durationMs": 482
+    },
+    {
+      "id": "startup.billing",
+      "label": "Billing limits API",
+      "category": "connectivity",
+      "status": "pass",
+      "detail": "GET /api/billing/limits: HTTP 200, JSON object received (reachability only)",
+      "durationMs": 514
+    },
+    {
+      "id": "auth.credentials",
+      "category": "auth",
+      "label": "Credential storage read",
+      "status": "pass",
+      "detail": "stored login session loaded from credential storage",
+      "durationMs": 0
+    },
+    {
+      "id": "auth.tokenExpiry",
+      "category": "auth",
+      "label": "Access token expiry",
+      "status": "pass",
+      "detail": "access token valid until 2026-11-02T15:13:21.000Z; this run does not exercise the api.workos.com token refresh"
+    },
+    {
+      "id": "auth.workosRefresh",
+      "category": "auth",
+      "label": "WorkOS token refresh endpoint",
+      "status": "pass",
+      "detail": "POST api.workos.com/authenticate answered HTTP 400 (invalid-credential probe; any response proves the refresh request transits the network)",
+      "durationMs": 143
+    },
+    {
+      "id": "auth.verify",
+      "category": "auth",
+      "label": "Auth verification",
+      "status": "pass",
+      "detail": "authenticated as <user> via stored login session",
+      "durationMs": 0
+    }
+  ]
+}
