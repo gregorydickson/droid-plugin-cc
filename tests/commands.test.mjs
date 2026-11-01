@@ -4,6 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { VALID_REASONING_EFFORTS } from "../plugins/droid/scripts/lib/models.mjs";
+import { run } from "./helpers.mjs";
 
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -77,6 +78,7 @@ test("continue is not exposed as a user-facing command", () => {
   assert.deepEqual(commandFiles, [
     "adversarial-review.md",
     "cancel.md",
+    "mission.md",
     "models.md",
     "rescue.md",
     "result.md",
@@ -226,4 +228,25 @@ test("models command is user-only and forwards to the companion", () => {
   assert.match(source, /^disable-model-invocation: true$/m);
   assert.match(source, /droid-companion\.mjs" models "\$ARGUMENTS"/);
   assert.match(source, /allowed-tools: Bash\(node:\*\)/);
+});
+
+const flagsIn = text => new Set(text.match(/--[a-z][a-z-]*/g));
+
+test("mission command forwards a background mission and states what a mission runs with", () => {
+  const source = read("commands/mission.md");
+  assert.match(source, /^disable-model-invocation: true$/m);
+  assert.match(source, /allowed-tools: Bash\(node:\*\)/);
+  assert.match(source, /droid-companion\.mjs" mission --background "\$ARGUMENTS"/);
+  assert.match(source, /do NOT wrap the call in `Bash\(\.\.\., run_in_background: true\)`/);
+  assert.match(source, /Missions cannot run under the lane lock wrapper/);
+  assert.match(source, /runs at `--auto high`/);
+  assert.match(source, /commit and push/);
+  assert.match(source, /Each one left unset falls back to the orchestrator's model and effort/);
+  const help = run(process.execPath, [path.join(PLUGIN_ROOT, "scripts", "droid-companion.mjs"), "help"]);
+  const usage = help.stdout.split("\n").find(line => line.includes("droid-companion.mjs mission "));
+  assert.ok(usage, help.stdout + help.stderr);
+  const accepted = flagsIn(usage);
+  for (const forced of ["--json", "--background"]) assert.ok(accepted.delete(forced), `companion mission usage lost ${forced}`);
+  const hint = source.match(/^argument-hint: '(.*)'$/m)?.[1] ?? "";
+  assert.deepEqual(flagsIn(hint), accepted, "argument-hint lists exactly the flags the companion's mission accepts");
 });
