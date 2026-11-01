@@ -161,6 +161,11 @@ const LEVELS = {
 };
 const COMMAND_ARGV = {
   task: () => ["task", "Diagnose the failing test"],
+  // The parent runs before setup stores the config default, so a fork that copied the parent's model would miss it.
+  "task --fork": ({ exec }) => {
+    exec("task", "--name", "fork-parent", "Start the parent");
+    return ["task", "--fork", "fork-parent", "Explore an alternative"];
+  },
   review: () => ["review", "--scope", "working-tree"],
   "adversarial-review": () => ["adversarial-review", "--scope", "working-tree"],
   compare: ({ root }) => {

@@ -97,7 +97,7 @@ const WORKER_PATH_OPTIONS = ["output-schema", "result-file", "notify-socket", "m
 const PER_TURN_WORKER_OPTIONS = ["brief", "preread"];
 // Commands whose spawned droid takes -m/-r from resolveModelChoice. A new one must be added here and to the model-choice test matrix.
 export { JOB_KINDS };
-export const MODEL_RESOLVING_COMMANDS = ["task", "review", "adversarial-review", "compare", "verify-claims"];
+export const MODEL_RESOLVING_COMMANDS = ["task", "task --fork", "review", "adversarial-review", "compare", "verify-claims"];
 const GLOBAL_DEFAULTS_SCOPE = "Defaults apply to all workspaces using this plugin data dir.";
 const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude turn.";
 
@@ -108,7 +108,7 @@ function printUsage() {
       "  node scripts/droid-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--default-model <id>] [--default-effort <level>] [--clear-default-model] [--json]",
       "  node scripts/droid-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
       "  node scripts/droid-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
-      `  node scripts/droid-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model>] [--effort <${VALID_REASONING_EFFORTS.join("|")}>] [prompt]`,
+      `  node scripts/droid-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh|--fork <job|name>] [--model <model>] [--effort <${VALID_REASONING_EFFORTS.join("|")}>] [prompt]`,
       "  node scripts/droid-companion.mjs transfer [--source <claude-jsonl>] [--json]",
       "  node scripts/droid-companion.mjs models [--json]",
       "  node scripts/droid-companion.mjs status [job-id] [--all] [--json]",
@@ -947,7 +947,7 @@ function resolveSpecOptions(options) {
 
 async function handleTask(argv) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["model", "effort", "cwd", "prompt-file", "spec-model", "spec-effort", ...WORKER_VALUE_OPTIONS],
+    valueOptions: ["model", "effort", "cwd", "prompt-file", "spec-model", "spec-effort", "fork", ...WORKER_VALUE_OPTIONS],
     repeatedOptions: ["instructions", "preread", "mcp-tool"],
     booleanOptions: ["json", "write", "resume-last", "resume", "fresh", "background", "spec", ...WORKER_BOOLEAN_OPTIONS],
     aliasMap: { m: "model" }
@@ -957,6 +957,10 @@ async function handleTask(argv) {
   const resumeLast = Boolean(options["resume-last"] || options.resume);
   const spec = resolveSpecOptions(options);
   if (resumeLast && options.fresh) throw new Error("Choose either --resume/--resume-last or --fresh.");
+  if (options.fork != null) {
+    if (resumeLast) throw new Error("Choose either --resume/--resume-last or --fork.");
+    return forkSession(selectedSession(cwd, options.fork), readTaskPrompt(cwd, options, positionals) || DEFAULT_CONTINUE_PROMPT, { ...options, overrideCwd: cwd }, spec);
+  }
   if (resumeLast) {
     const latest = await resolveLatestTrackedTaskThread(cwd);
     const previous = latest?.jobId ? readStoredJob(workspaceRoot, latest.jobId) : null;
@@ -1247,31 +1251,40 @@ async function handleSessions(argv) {
  * recorded worker arguments minus per-turn input; explicit flags win. A literal
  * result file belongs to the job that wrote it, while a {jobId} pattern carries over.
  */
-async function resumedRequest(previous, options) {
+async function resumedRequest(previous, options, { fork = false } = {}) {
   const { spec, specModel, specEffort, ...base } = previous.request;
-  if (options.answering) return { request: base, worker: {} };
+  if (options.answering && !fork) return { request: base, worker: {} };
   const explicit = absoluteWorkerArgs(options.overrideCwd ?? base.cwd, options);
   if (options.worktree) explicit.worktree = options.overrideCwd;
-  for (const key of ["name", "persistent"]) if (explicit[key]) throw new Error(`--${key} cannot change on resume; the session keeps its name.`);
+  if (!fork) for (const key of ["name", "persistent"]) if (explicit[key]) throw new Error(`--${key} cannot change on resume; the session keeps its name.`);
   const recorded = base.workerArgs;
   if (explicit.worktree && explicit.worktree !== (recorded?.worktree ?? null)) throw new Error("A resumed session keeps its original worktree.");
+  // A fork is a new job: it takes a name only from its own --name and its model from the default chain.
+  const choice = fork ? resolveModelChoice(options) : {
+    model: options.model ? normalizeRequestedModel(options.model) : base.model,
+    effort: options.effort ? normalizeReasoningEffort(options.effort) : base.effort
+  };
   if (!recorded) {
     // Records written before worker arguments were kept: replay the stored request, minus its result file.
-    if (Object.keys(explicit).some(key => key !== "worktree") || options.model || options.effort) throw new Error("This session predates resume overrides; resume it without option flags.");
-    return { request: { ...base, resultFile: null }, worker: { resultFile: null } };
+    if (Object.keys(explicit).some(key => key !== "worktree" && !(fork && key === "name")) || (!fork && (options.model || options.effort))) throw new Error("This session predates resume overrides; resume it without option flags.");
+    const naming = fork ? { name: explicit.name ?? null, persistent: Boolean(explicit.name), ...choice } : {};
+    return { request: { ...base, resultFile: null, ...naming }, worker: { resultFile: null, ...naming } };
   }
   const inherited = Object.fromEntries(Object.entries(recorded).filter(([key, value]) =>
-    !PER_TURN_WORKER_OPTIONS.includes(key) && (key !== "result-file" || value.includes("{jobId}"))));
+    !PER_TURN_WORKER_OPTIONS.includes(key) && !(fork && key === "name") && (key !== "result-file" || value.includes("{jobId}"))));
   const worker = await prepareWorkerOptions(base.cwd, { ...inherited, ...explicit });
-  const model = options.model ? normalizeRequestedModel(options.model) : base.model;
-  const effort = options.effort ? normalizeReasoningEffort(options.effort) : base.effort;
+  const { model, effort } = choice;
   const write = Boolean(inherited.write || explicit.write);
   return { request: { ...base, ...worker, model, effort, write }, worker: { ...worker, model, effort, write } };
 }
 
-async function resumeSession(previous, prompt, options = {}) {
+function assertContinuable(previous) {
   if (["queued", "running"].includes(previous.status)) throw new Error("Session is still running. Wait for completion or cancel before resuming.");
   if (!previous.threadId || !previous.request) throw new Error("Session has no resumable thread.");
+}
+
+async function resumeSession(previous, prompt, options = {}) {
+  assertContinuable(previous);
   const workspaceRoot = previous.workspaceRoot;
   options = { ...options, answering: options.answering || previous.status === "awaiting-answer" };
   const resumed = await resumedRequest(previous, options);
@@ -1299,6 +1312,29 @@ async function resumeSession(previous, prompt, options = {}) {
   }));
   if (options.background) {
     const { payload } = await enqueueBackgroundTask(workspaceRoot, job, request);
+    outputCommandResult(payload, renderQueuedTaskLaunch(payload), options.json); return;
+  }
+  await runForegroundCommand(job, progress => executeTaskRun({ ...request, onProgress: progress }), { json: options.json });
+}
+
+/**
+ * A fork is a new job on a copy of the parent's Droid session: it replays the parent's
+ * request minus per-turn input and never writes the parent record. An awaiting-answer
+ * parent stays paused, and an already-resumed record forks its own thread.
+ */
+async function forkSession(parent, prompt, options, spec) {
+  assertContinuable(parent);
+  requireDroidCapability("fork", getDroidVersion().version);
+  const { request: replayed, worker } = await resumedRequest(parent, options, { fork: true });
+  prompt = [prompt, worker.briefText, worker.inputContext].filter(Boolean).join("\n\n");
+  const write = Boolean(replayed.write);
+  const job = { ...buildTaskJob(parent.workspaceRoot, buildTaskRunMetadata({ prompt }), write), ...worker, structured: true, forkedFrom: { jobId: parent.id, threadId: parent.threadId } };
+  const request = { ...replayed, ...spec, resumeLast: false, resumeThreadId: null, forkThreadId: parent.threadId, prompt, jobId: job.id };
+  job.request = request;
+  reserveNamedJob(job);
+  if (options.background) {
+    ensureDroidAvailable(request.cwd);
+    const { payload } = await enqueueBackgroundTask(parent.workspaceRoot, job, request);
     outputCommandResult(payload, renderQueuedTaskLaunch(payload), options.json); return;
   }
   await runForegroundCommand(job, progress => executeTaskRun({ ...request, onProgress: progress }), { json: options.json });

@@ -231,7 +231,10 @@ export function normalizeMcpToolSelector(value) {
  * input session (--input-format stream-jsonrpc) ignores --auto/-m/-r/--only-tools,
  * which would drop the tool fence. So a fresh turn is a one-shot stream-jsonrpc
  * exec and a continued turn (resume, answer, schema repair) streams stream-json;
- * neither passes --input-format, so the fence flags apply to both.
+ * neither passes --input-format, so the fence flags apply to both. A fork
+ * (--fork <parent>) also streams stream-json but opens a new session, so it
+ * never carries --session-id; its schema repair continues the fork's own new
+ * session with --session-id and drops --fork.
  *
  * Fences: read-only is droid's default autonomy over READ_ONLY_TOOLS (the
  * wide toolbox: web, skills, subagents, minus whatever --no-web/--no-subagents
@@ -245,8 +248,9 @@ export function normalizeMcpToolSelector(value) {
  */
 export function buildDroidExecArgs(cwd, file, options = {}) {
   const resume = Boolean(options.resumeThreadId);
+  const fork = Boolean(options.forkThreadId) && !options.repair;
   if (options.tag && !JOB_KINDS.includes(options.tag.kind)) throw new Error(`Unknown job kind "${options.tag.kind}"`);
-  const args = ["exec", "--output-format", resume ? "stream-json" : "stream-jsonrpc", "--cwd", cwd, "-f", file];
+  const args = ["exec", "--output-format", resume || fork ? "stream-json" : "stream-jsonrpc", "--cwd", cwd, "-f", file];
   const sandbox = options.repair ? "read-only" : options.sandbox;
   const mcpSelectors = options.repair ? [] : (options.mcpTools ?? []).map(selector => `MCP:${normalizeMcpToolSelector(selector)}`);
   if (sandbox === "workspace-write" || sandbox === "run-commands") args.push("--auto", "medium");
@@ -261,6 +265,7 @@ export function buildDroidExecArgs(cwd, file, options = {}) {
     if (specEffort) args.push("--spec-reasoning-effort", specEffort);
   }
   if (resume) args.push("--session-id", options.resumeThreadId);
+  if (fork) args.push("--fork", options.forkThreadId);
   if (options.systemPromptFile && !options.repair) args.push("--append-system-prompt-file", options.systemPromptFile);
   if (options.tag && !options.steerable && droidCapabilities(getDroidVersion(options.env ?? process.env).version).tag) {
     args.push("--tag", JSON.stringify({ name: TAG_NAME, metadata: { jobId: options.tag.jobId, kind: options.tag.kind } }));
