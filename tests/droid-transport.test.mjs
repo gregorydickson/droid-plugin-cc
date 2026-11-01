@@ -326,3 +326,14 @@ test("--spec-model and --spec-effort require --spec, and --spec honours the Droi
   assert.equal(old.status, 1);
   assert.match(old.stderr, /requires Droid CLI >= 1\.1\.0 \(found 0\.238\.0\)/);
 });
+
+test("--resume-last --spec onto a legacy job record without a stored request still sends no spec flags", () => {
+  const { invoke, repo } = taggedRepo();
+  const { job } = invoke("task", "first");
+  const file = path.join(resolveJobsDir(repo), `${job.id}.json`);
+  const { request, ...legacy } = JSON.parse(fs.readFileSync(file));
+  assert.ok(request, "the record had a request to strip");
+  fs.writeFileSync(file, JSON.stringify(legacy));
+  const { args } = invoke("task", "--resume-last", "--spec", "--spec-model", "glm-5.3", "follow up");
+  for (const flag of SPEC_FLAGS) assert.ok(!args.includes(flag), flag);
+});
