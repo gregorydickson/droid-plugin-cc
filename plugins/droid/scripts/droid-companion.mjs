@@ -97,7 +97,12 @@ const WORKER_PATH_OPTIONS = ["output-schema", "result-file", "notify-socket", "m
 const PER_TURN_WORKER_OPTIONS = ["brief", "preread"];
 // Commands whose spawned droid takes -m/-r from resolveModelChoice. A new one must be added here and to the model-choice test matrix.
 export { JOB_KINDS };
-export const MODEL_RESOLVING_COMMANDS = ["task", "task --fork", "review", "adversarial-review", "compare", "verify-claims"];
+export const MODEL_RESOLVING_COMMANDS = ["task", "task --fork", "review", "adversarial-review", "compare", "verify-claims", "mission"];
+// Worker flags a mission refuses: it runs one unnamed, non-pausing turn at --auto high with droid's own toolset.
+export const MISSION_REJECTED_VALUE_FLAGS = ["name", "fanout", "brief", "preread", "fork"];
+export const MISSION_REJECTED_BOOLEAN_FLAGS = ["persistent", "pause-and-ask", "read-only", "run-commands", "write", "steerable", "spec"];
+const LANE_WRAPPER_BINARY = "droid-lock.sh";
+const MISSION_TITLE = "Droid Mission";
 const GLOBAL_DEFAULTS_SCOPE = "Defaults apply to all workspaces using this plugin data dir.";
 const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude turn.";
 
@@ -109,6 +114,7 @@ function printUsage() {
       "  node scripts/droid-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
       "  node scripts/droid-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
       `  node scripts/droid-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh|--fork <job|name>] [--model <model>] [--effort <${VALID_REASONING_EFFORTS.join("|")}>] [prompt]`,
+      "  node scripts/droid-companion.mjs mission [--background] [--model <model>] [--effort <level>] [--worker-model <model>] [--worker-effort <level>] [--validator-model <model>] [--validator-effort <level>] [--instructions <file>] [--worktree <path>] [--lock-cmd <command> --unlock-cmd <command>] [--json] <goal>",
       "  node scripts/droid-companion.mjs transfer [--source <claude-jsonl>] [--json]",
       "  node scripts/droid-companion.mjs models [--json]",
       "  node scripts/droid-companion.mjs status [job-id] [--all] [--json]",
@@ -611,6 +617,25 @@ async function executeTaskRun(request) {
   };
 }
 
+async function executeMissionRun(request) {
+  ensureDroidAvailable(request.cwd);
+  const result = await runDroidTurn(resolveWorkspaceRoot(request.cwd), { ...request, mission: true, tag: jobTag(request.jobId, "mission") });
+  const rawOutput = typeof result.finalMessage === "string" ? result.finalMessage : "";
+  const failureMessage = result.error?.message ?? result.stderr ?? "";
+  return {
+    exitStatus: result.status,
+    error: result.error,
+    threadId: result.threadId,
+    turnId: result.turnId,
+    payload: { status: result.status, threadId: result.threadId, rawOutput, touchedFiles: result.touchedFiles, reasoningSummary: result.reasoningSummary, usage: result.usage ?? null },
+    rendered: renderTaskResult({ rawOutput, failureMessage, reasoningSummary: result.reasoningSummary }, { title: MISSION_TITLE, jobId: request.jobId ?? null, write: true }),
+    summary: firstMeaningfulLine(rawOutput, firstMeaningfulLine(failureMessage, `${MISSION_TITLE} finished.`)),
+    jobTitle: MISSION_TITLE,
+    jobClass: "mission",
+    write: true
+  };
+}
+
 function buildReviewJobMetadata(reviewName, target) {
   return {
     kind: reviewName === "Adversarial Review" ? "adversarial-review" : "review",
@@ -641,8 +666,8 @@ function renderQueuedTaskLaunch(payload) {
 }
 
 function getJobKindLabel(kind, jobClass) {
-  if (kind === "adversarial-review") {
-    return "adversarial-review";
+  if (kind === "adversarial-review" || kind === "mission") {
+    return kind;
   }
   return jobClass === "review" ? "review" : "rescue";
 }
@@ -987,6 +1012,49 @@ async function handleTask(argv) {
   await runForegroundCommand(job, progress => executeTaskRun({ ...request, onProgress: progress }), { json: options.json });
 }
 
+/** A compatibility check, not a safety gate: the lane wrapper refuses --mission, so fail with a clear message first. */
+function refuseLaneWrapper(env = process.env) {
+  if (path.basename(env.DROID_BINARY ?? "") === LANE_WRAPPER_BINARY) throw new Error("missions cannot run under the lane lock wrapper (it refuses --mission).");
+}
+
+async function handleMission(argv) {
+  const { options, positionals } = parseCommandInput(argv, {
+    valueOptions: ["model", "effort", "worker-model", "worker-effort", "validator-model", "validator-effort", "instructions", "worktree", "lock-cmd", "unlock-cmd", "cwd", ...MISSION_REJECTED_VALUE_FLAGS],
+    repeatedOptions: ["instructions"],
+    booleanOptions: ["json", "background", ...MISSION_REJECTED_BOOLEAN_FLAGS],
+    aliasMap: { m: "model" }
+  });
+  const rejected = [...MISSION_REJECTED_VALUE_FLAGS, ...MISSION_REJECTED_BOOLEAN_FLAGS].find(flag => options[flag] != null);
+  if (rejected) throw new Error(`--${rejected} is not supported by mission.`);
+  const goal = positionals.join(" ").trim();
+  if (!goal) throw new Error("Provide a mission goal.");
+  refuseLaneWrapper();
+  requireDroidCapability("mission", getDroidVersion().version);
+  const cwd = resolveCommandCwd(options);
+  const worker = await prepareWorkerOptions(cwd, options);
+  const { model, effort } = resolveModelChoice(options);
+  const job = {
+    ...createCompanionJob({ prefix: "mission", kind: "mission", title: MISSION_TITLE, workspaceRoot: resolveWorkspaceRoot(cwd), jobClass: "mission", summary: shorten(goal), write: true }),
+    ...worker, model, effort
+  };
+  const request = {
+    runner: "mission", jobId: job.id, cwd, prompt: goal, model, effort,
+    workerModel: normalizeRequestedModel(options["worker-model"]),
+    workerEffort: normalizeReasoningEffort(options["worker-effort"]),
+    validatorModel: normalizeRequestedModel(options["validator-model"]),
+    validatorEffort: normalizeReasoningEffort(options["validator-effort"]),
+    ...worker
+  };
+  job.request = request;
+  if (options.background) {
+    ensureDroidAvailable(cwd);
+    const { payload } = await enqueueBackgroundTask(cwd, job, request);
+    outputCommandResult(payload, renderQueuedTaskLaunch(payload), options.json);
+    return;
+  }
+  await runForegroundCommand(job, progress => executeMissionRun({ ...request, onProgress: progress }), { json: options.json });
+}
+
 async function handleTransfer(argv) {
   const { options } = parseCommandInput(argv, {
     valueOptions: ["cwd", "source"],
@@ -1024,7 +1092,7 @@ async function handleTaskWorker(argv) {
   // Dispatch on the request's own runner rather than assuming `task`. A record
   // written before `runner` existed has no discriminator, so absent means task
   // and any job queued by an older version still completes.
-  const runReviewJob = request.runner === "review";
+  const execute = request.runner === "review" ? executeReviewRun : request.runner === "mission" ? executeMissionRun : executeTaskRun;
 
   const { logFile, progress } = createTrackedProgress(
     {
@@ -1041,16 +1109,7 @@ async function handleTaskWorker(argv) {
       workspaceRoot,
       logFile
     },
-    () =>
-      runReviewJob
-        ? executeReviewRun({
-            ...request,
-            onProgress: progress
-          })
-        : executeTaskRun({
-            ...request,
-            onProgress: progress
-          }),
+    () => execute({ ...request, onProgress: progress }),
     { logFile }
   );
 }
@@ -1281,6 +1340,7 @@ async function resumedRequest(previous, options, { fork = false } = {}) {
 function assertContinuable(previous) {
   if (["queued", "running"].includes(previous.status)) throw new Error("Session is still running. Wait for completion or cancel before resuming.");
   if (!previous.threadId || !previous.request) throw new Error("Session has no resumable thread.");
+  if (previous.kind === "mission") throw new Error("A mission cannot be resumed or forked; start a new mission.");
 }
 
 async function resumeSession(previous, prompt, options = {}) {
@@ -1495,6 +1555,9 @@ async function main() {
       break;
     case "verify-claims":
       await handleVerifyClaims(argv);
+      break;
+    case "mission":
+      await handleMission(argv);
       break;
     case "transfer":
       await handleTransfer(argv);

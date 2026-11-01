@@ -177,7 +177,8 @@ const COMMAND_ARGV = {
     const sha = run("git", ["rev-parse", "HEAD"], { cwd: root }).stdout.trim();
     fs.writeFileSync(path.join(root, "claims.json"), JSON.stringify([{ id: "c1", text: "original is present", path: "source.txt", line: 1, sha }]));
     return ["verify-claims", "claims.json"];
-  }
+  },
+  mission: () => ["mission", "Create hello.txt"]
 };
 const spawnedArgs = bin => JSON.parse(fs.readFileSync(path.join(bin, "fake-droid-state.json"))).threadRequests.at(-1).args;
 const flagValue = (args, flag) => args.includes(flag) ? args[args.indexOf(flag) + 1] : null;
@@ -200,6 +201,10 @@ for (const command of MODEL_RESOLVING_COMMANDS) {
       assert.equal(flagValue(args, "-m"), want.model, `${command}/${level} -m`);
       assert.equal(flagValue(args, "-r"), want.effort, `${command}/${level} -r`);
       if (want.model === null) assert.ok(!args.includes("-m") && !args.includes("-r"), "no -m/-r when nothing is set");
+      if (command === "mission") {
+        for (const flag of ["--worker-model", "--validator-model"]) assert.equal(flagValue(args, flag), want.model, `${command}/${level} ${flag}`);
+        for (const flag of ["--worker-reasoning-effort", "--validator-reasoning-effort"]) assert.equal(flagValue(args, flag), want.effort, `${command}/${level} ${flag}`);
+      }
     });
   }
 }
