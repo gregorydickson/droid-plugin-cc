@@ -23,7 +23,8 @@ import {
     normalizeMcpToolSelector,
     parseStructuredOutput,
     readOutputSchema,
-    runDroidTurn
+    runDroidTurn,
+    JOB_KINDS
   } from "./lib/droid.mjs";
 import { resolveRuntimeOptions } from "./lib/runtime-options.mjs";
 import { withFileLockSync } from "./lib/file-lock.mjs";
@@ -93,6 +94,7 @@ const WORKER_PATH_OPTIONS = ["output-schema", "result-file", "notify-socket", "m
 // Per-turn input: the resumed thread already holds the previous slice's brief and preread.
 const PER_TURN_WORKER_OPTIONS = ["brief", "preread"];
 // Commands whose spawned droid takes -m/-r from resolveModelChoice. A new one must be added here and to the model-choice test matrix.
+export { JOB_KINDS };
 export const MODEL_RESOLVING_COMMANDS = ["task", "review", "adversarial-review", "compare", "verify-claims"];
 const GLOBAL_DEFAULTS_SCOPE = "Defaults apply to all workspaces using this plugin data dir.";
 const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude turn.";
@@ -406,6 +408,11 @@ async function resolveLatestTrackedTaskThread(cwd, options = {}) {
   return findLatestTaskThread(workspaceRoot);
 }
 
+// A request queued before jobs carried an id has nothing to tag with.
+function jobTag(jobId, kind) {
+  return jobId ? { jobId, kind } : undefined;
+}
+
 async function executeReviewRun(request) {
   ensureDroidAvailable(request.cwd);
   ensureGitRepository(request.cwd);
@@ -421,6 +428,7 @@ async function executeReviewRun(request) {
     const context = collectReviewContext(request.cwd, target);
     const result = await runDroidTurn(request.cwd, {
       ...request, sandbox: request.runCommands ? "run-commands" : "read-only",
+      tag: jobTag(request.jobId, request.kind ?? (request.reviewName === "Adversarial Review" ? "adversarial-review" : "review")),
       prompt: `Review code changes for correctness, regressions, security, and missing tests. Report actionable findings with file/line references, or explicitly say no material issues were found. Do not modify files.\nTarget: ${target.label}\n${context.collectionGuidance}\n${context.content}`
     });
     result.reviewText = result.finalMessage;
@@ -468,6 +476,7 @@ async function executeReviewRun(request) {
     ...request,
     prompt,
     model: request.model,
+    tag: jobTag(request.jobId, request.kind ?? (request.reviewName === "Adversarial Review" ? "adversarial-review" : "review")),
     sandbox: request.runCommands ? "run-commands" : "read-only",
     outputSchema: request.outputSchema ?? readOutputSchema(REVIEW_SCHEMA),
     onProgress: request.onProgress
@@ -550,6 +559,7 @@ async function executeTaskRun(request) {
     effort: request.effort,
     sandbox: request.sandbox ?? (request.write ? "workspace-write" : request.runCommands ? "run-commands" : "read-only"),
     onProgress: request.onProgress,
+    tag: jobTag(request.jobId, "task"),
     persistThread: true,
     threadName: resumeThreadId ? null : request.name ?? buildPersistentTaskThreadName(request.prompt || DEFAULT_CONTINUE_PROMPT)
   });
@@ -684,9 +694,11 @@ function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId
  * on job records written by earlier versions, so the worker treats a missing
  * value as "task" and any already-queued job keeps running.
  */
-function buildReviewRequest({ cwd, base, scope, model, focusText, reviewName }) {
+function buildReviewRequest({ cwd, base, scope, model, focusText, reviewName, jobId, kind }) {
   return {
     runner: "review",
+    jobId,
+    kind,
     cwd,
     base,
     scope,
@@ -823,7 +835,9 @@ async function handleReviewCommand(argv, config) {
     scope: options.scope,
     model: job.model,
     focusText,
-    reviewName: config.reviewName
+    reviewName: config.reviewName,
+    jobId: job.id,
+    kind: job.kind
   }), ...worker, effort: job.effort };
   job.request = reviewRequest;
   if (options.background) ensureDroidAvailable(cwd);

@@ -3,11 +3,14 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runDroidTurn, buildPauseOutputSchema, READ_ONLY_TOOLS, REPAIR_TOOLS } from "../plugins/droid/scripts/lib/droid.mjs";
+import { runDroidTurn, buildDroidExecArgs, buildPauseOutputSchema, READ_ONLY_TOOLS, REPAIR_TOOLS, JOB_KINDS } from "../plugins/droid/scripts/lib/droid.mjs";
 import { resolveRuntimeOptions } from "../plugins/droid/scripts/lib/runtime-options.mjs";
-import { makeTempDir } from "./helpers.mjs";
+import { initGitRepo, makeTempDir, run } from "./helpers.mjs";
+import { resolveJobsDir } from "../plugins/droid/scripts/lib/state.mjs";
 import { installWorkerDroid } from "./worker-droid-fixture.mjs";
-import { buildEnv, SESSION_USAGE } from "./fake-droid-fixture.mjs";
+import { buildEnv, installFakeDroid, SESSION_USAGE } from "./fake-droid-fixture.mjs";
+
+const COMPANION = path.resolve(import.meta.dirname, "../plugins/droid/scripts/droid-companion.mjs");
 const schema = { type: "object", required: ["count"], additionalProperties: false, properties: { count: { type: "integer" } } };
 function fixture(t, behavior) {
   const bin = makeTempDir(); installWorkerDroid(bin, behavior);
@@ -187,4 +190,74 @@ test("real Droid obeys a system-prompt instruction on a fresh and a resumed turn
   assert.equal(resumed.status, 0, resumed.error?.message);
   assert.equal(resumed.threadId, first.threadId);
   assert.ok(resumed.finalMessage.includes(token), resumed.finalMessage);
+});
+
+const tagOf = args => JSON.parse(args[args.indexOf("--tag") + 1]);
+const expectedTag = job => ({ name: "droid-plugin-cc", metadata: { jobId: job.id, kind: job.kind } });
+
+function taggedRepo() {
+  const repo = makeTempDir(), bin = makeTempDir();
+  installFakeDroid(bin);
+  initGitRepo(repo);
+  fs.writeFileSync(path.join(repo, "app.js"), "export const value = 1;\n");
+  run("git", ["add", "app.js"], { cwd: repo }); run("git", ["commit", "-m", "init"], { cwd: repo });
+  fs.writeFileSync(path.join(repo, "app.js"), "export const value = 2;\n");
+  const statePath = path.join(bin, "fake-droid-state.json");
+  const jobsOf = () => (fs.existsSync(resolveJobsDir(repo)) ? fs.readdirSync(resolveJobsDir(repo)) : []).filter(f => f.endsWith(".json")).map(f => JSON.parse(fs.readFileSync(path.join(resolveJobsDir(repo), f))));
+  const requests = () => (fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath)).threadRequests : []);
+  // Runs one companion command and returns the single new job record plus the argv of the droid exec it spawned.
+  const invoke = (...argv) => {
+    const seen = new Set(jobsOf().map(j => j.id)), before = requests().length;
+    const result = run("node", [COMPANION, ...argv], { cwd: repo, env: buildEnv(bin) });
+    assert.equal(result.status, 0, result.stderr);
+    const [job, ...extra] = jobsOf().filter(j => !seen.has(j.id));
+    assert.deepEqual(extra, []);
+    return { job, args: requests().slice(before).at(-1).args };
+  };
+  return { invoke };
+}
+
+for (const [label, argv, kind] of [
+  ["task", ["task", "do it"], "task"],
+  ["review", ["review"], "review"],
+  ["adversarial-review", ["adversarial-review"], "adversarial-review"],
+  ["resumed task", ["task", "--resume-last", "follow up"], "task"]
+]) {
+  test(`${label} passes its own job id and kind to droid as --tag`, () => {
+    const { invoke } = taggedRepo();
+    if (label === "resumed task") invoke("task", "first");
+    const { job, args } = invoke(...argv);
+    assert.equal(job.kind, kind);
+    assert.ok(JOB_KINDS.includes(job.kind));
+    assert.deepEqual(tagOf(args), expectedTag(job));
+  });
+}
+
+test("a schema repair turn carries the same tag as the turn it repairs", async t => {
+  const state = fixture(t, "repair-once");
+  const tag = { jobId: "task-abc", kind: "task" };
+  await runDroidTurn(makeTempDir(), { prompt: "Count", outputSchema: schema, tag });
+  const requests = state().threadRequests;
+  assert.deepEqual(requests.map(r => r.method), ["start", "resume"]);
+  for (const request of requests) assert.deepEqual(tagOf(request.args), { name: "droid-plugin-cc", metadata: tag });
+});
+
+test("a Droid CLI below the feature floor gets no --tag", async t => {
+  const state = fixture(t);
+  await runDroidTurn(makeTempDir(), { prompt: "Count", tag: { jobId: "task-abc", kind: "task" }, env: { ...process.env, FAKE_DROID_VERSION: "0.238.0" } });
+  assert.ok(!state().threadRequests[0].args.includes("--tag"));
+});
+
+test("a steerable turn and an untagged turn get no --tag", async t => {
+  const state = fixture(t);
+  await runDroidTurn(makeTempDir(), { prompt: "Count" });
+  assert.ok(!state().threadRequests[0].args.includes("--tag"));
+  assert.ok(!buildDroidExecArgs("/x", "/f", { tag: { jobId: "task-abc", kind: "task" }, steerable: true }).includes("--tag"));
+});
+
+test("an unknown job kind throws before spawn", async t => {
+  fixture(t);
+  assert.throws(() => buildDroidExecArgs("/x", "/f", { tag: { jobId: "task-abc", kind: "rescue" } }), /Unknown job kind "rescue"/);
+  await assert.rejects(runDroidTurn(makeTempDir(), { prompt: "Count", tag: { jobId: "task-abc", kind: "rescue" } }), /Unknown job kind/);
+  assert.ok(!fs.existsSync(path.join(path.dirname(process.env.DROID_BINARY), "fake-droid-state.json")), "droid was never spawned");
 });

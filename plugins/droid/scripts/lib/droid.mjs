@@ -19,6 +19,8 @@ export function getDroidAvailability(cwd) {
 }
 
 export const DROID_FEATURE_FLOOR = "1.1.0";
+export const JOB_KINDS = Object.freeze(["task", "review", "adversarial-review", "mission"]);
+export const TAG_NAME = "droid-plugin-cc";
 const CAPABILITY_NAMES = ["tag", "systemPromptFile", "mission", "fork", "spec", "steer"];
 const versionCache = new Map();
 
@@ -182,6 +184,7 @@ export function normalizeMcpToolSelector(value) {
  */
 export function buildDroidExecArgs(cwd, file, options = {}) {
   const resume = Boolean(options.resumeThreadId);
+  if (options.tag && !JOB_KINDS.includes(options.tag.kind)) throw new Error(`Unknown job kind "${options.tag.kind}"`);
   const args = ["exec", "--output-format", resume ? "stream-json" : "stream-jsonrpc", "--cwd", cwd, "-f", file];
   const sandbox = options.repair ? "read-only" : options.sandbox;
   const mcpSelectors = options.repair ? [] : (options.mcpTools ?? []).map(selector => `MCP:${normalizeMcpToolSelector(selector)}`);
@@ -192,6 +195,9 @@ export function buildDroidExecArgs(cwd, file, options = {}) {
   if (options.effort) args.push("-r", options.effort);
   if (resume) args.push("--session-id", options.resumeThreadId);
   if (options.systemPromptFile && !options.repair) args.push("--append-system-prompt-file", options.systemPromptFile);
+  if (options.tag && !options.steerable && droidCapabilities(getDroidVersion(options.env ?? process.env).version).tag) {
+    args.push("--tag", JSON.stringify({ name: TAG_NAME, metadata: { jobId: options.tag.jobId, kind: options.tag.kind } }));
+  }
   return args;
 }
 
