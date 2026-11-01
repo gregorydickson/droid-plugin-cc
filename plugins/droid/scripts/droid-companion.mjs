@@ -99,8 +99,8 @@ const PER_TURN_WORKER_OPTIONS = ["brief", "preread"];
 export { JOB_KINDS };
 export const MODEL_RESOLVING_COMMANDS = ["task", "task --fork", "review", "adversarial-review", "compare", "verify-claims", "mission"];
 // Worker flags a mission refuses: it runs one unnamed, non-pausing turn at --auto high with droid's own toolset.
-export const MISSION_REJECTED_VALUE_FLAGS = ["name", "fanout", "brief", "preread", "fork"];
-export const MISSION_REJECTED_BOOLEAN_FLAGS = ["persistent", "pause-and-ask", "read-only", "run-commands", "write", "steerable", "spec"];
+const MISSION_REJECTED_VALUE_FLAGS = ["name", "fanout", "brief", "preread", "fork"];
+const MISSION_REJECTED_BOOLEAN_FLAGS = ["persistent", "pause-and-ask", "read-only", "run-commands", "write", "steerable", "spec"];
 const LANE_WRAPPER_BINARY = "droid-lock.sh";
 const MISSION_TITLE = "Droid Mission";
 const GLOBAL_DEFAULTS_SCOPE = "Defaults apply to all workspaces using this plugin data dir.";
