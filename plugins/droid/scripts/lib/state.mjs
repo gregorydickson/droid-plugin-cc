@@ -11,6 +11,7 @@ const STATE_VERSION = 1;
 const PLUGIN_DATA_ENV = "CLAUDE_PLUGIN_DATA";
 const FALLBACK_STATE_ROOT_DIR = path.join(os.tmpdir(), "droid-companion");
 const STATE_FILE_NAME = "state.json";
+const DEFAULTS_FILE_NAME = "defaults.json";
 const JOBS_DIR_NAME = "jobs";
 const MAX_JOBS = 50;
 
@@ -28,6 +29,11 @@ function defaultState() {
   };
 }
 
+/** The directory shared by every workspace using this plugin data dir. */
+export function resolveDataRoot() {
+  return process.env[PLUGIN_DATA_ENV] || FALLBACK_STATE_ROOT_DIR;
+}
+
 export function resolveStateDir(cwd) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   let canonicalWorkspaceRoot = workspaceRoot;
@@ -40,8 +46,7 @@ export function resolveStateDir(cwd) {
   const slugSource = path.basename(workspaceRoot) || "workspace";
   const slug = slugSource.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "workspace";
   const hash = createHash("sha256").update(canonicalWorkspaceRoot).digest("hex").slice(0, 16);
-  const pluginDataDir = process.env[PLUGIN_DATA_ENV];
-  const stateRoot = pluginDataDir ? path.join(pluginDataDir, "state") : FALLBACK_STATE_ROOT_DIR;
+  const stateRoot = process.env[PLUGIN_DATA_ENV] ? path.join(resolveDataRoot(), "state") : resolveDataRoot();
   return path.join(stateRoot, `${slug}-${hash}`);
 }
 
@@ -180,6 +185,32 @@ export function setConfig(cwd, key, value) {
       ...state.config,
       [key]: value
     };
+  });
+}
+
+function defaultsFile() {
+  return path.join(resolveDataRoot(), DEFAULTS_FILE_NAME);
+}
+
+/** Workspace-independent model/effort defaults: `{ model?, effort? }`, empty when unset or unreadable. */
+export function getGlobalDefaults() {
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(defaultsFile(), "utf8"));
+  } catch {
+    return {};
+  }
+  return Object.fromEntries(["model", "effort"].filter((key) => typeof parsed?.[key] === "string" && parsed[key]).map((key) => [key, parsed[key]]));
+}
+
+/** Merge `patch` into the global defaults; a null or undefined value removes that key. */
+export function setGlobalDefaults(patch) {
+  const file = defaultsFile();
+  return withFileLockSync(`${file}.lock`, () => {
+    const next = { ...getGlobalDefaults(), ...patch };
+    for (const key of Object.keys(next)) if (next[key] == null) delete next[key];
+    writeJsonAtomic(file, next);
+    return next;
   });
 }
 

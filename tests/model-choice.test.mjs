@@ -8,6 +8,7 @@ import { buildEnv, installFakeDroid, SESSION_USAGE } from "./fake-droid-fixture.
 import { sessionUsageFields } from "../plugins/droid/scripts/lib/tracked-jobs.mjs";
 import { upsertJob } from "../plugins/droid/scripts/lib/state.mjs";
 import { installWorkerDroid } from "./worker-droid-fixture.mjs";
+import { MODEL_RESOLVING_COMMANDS } from "../plugins/droid/scripts/droid-companion.mjs";
 
 const script = fileURLToPath(new URL("../plugins/droid/scripts/droid-companion.mjs", import.meta.url));
 function setup(extraEnv = {}, { worker = true } = {}) {
@@ -150,4 +151,98 @@ test("session usage with no prior record is the job's own usage; a legacy prior 
   const third = Object.fromEntries(Object.keys(TURN2).map(key => [key, TURN2[key] + 1]));
   assert.deepEqual(sessionUsageFields(workspace, "task-new", "thr-x", third).usage, minus(third, TURN2), "the latest prior record is subtracted");
   assert.deepEqual(sessionUsageFields(workspace, "task-new", "thr-x", TURN1).usage, Object.fromEntries(Object.keys(TURN1).map(key => [key, 0])), "a smaller total clamps at zero");
+});
+
+const LEVELS = {
+  flag: { flags: ["--model", "flag-model", "--effort", "low"], env: { DROID_DEFAULT_MODEL: "env-model", DROID_DEFAULT_EFFORT: "max" }, config: true, want: { model: "flag-model", effort: "low" } },
+  env: { flags: [], env: { DROID_DEFAULT_MODEL: "env-model", DROID_DEFAULT_EFFORT: "max" }, config: true, want: { model: "env-model", effort: "max" } },
+  config: { flags: [], env: {}, config: true, want: { model: "cfg-model", effort: "medium" } },
+  none: { flags: [], env: {}, config: false, want: { model: null, effort: null } }
+};
+const COMMAND_ARGV = {
+  task: () => ["task", "Diagnose the failing test"],
+  review: () => ["review", "--scope", "working-tree"],
+  "adversarial-review": () => ["adversarial-review", "--scope", "working-tree"],
+  compare: ({ root }) => {
+    fs.writeFileSync(path.join(root, "brief.md"), "Count rows");
+    fs.writeFileSync(path.join(root, "peer.cjs"), "process.stdout.write(JSON.stringify({ count: 2 }));");
+    return ["compare", "--brief", "brief.md", "--schema", "schema.json", "--against", `${JSON.stringify(process.execPath)} peer.cjs`];
+  },
+  "verify-claims": ({ root }) => {
+    const sha = run("git", ["rev-parse", "HEAD"], { cwd: root }).stdout.trim();
+    fs.writeFileSync(path.join(root, "claims.json"), JSON.stringify([{ id: "c1", text: "original is present", path: "source.txt", line: 1, sha }]));
+    return ["verify-claims", "claims.json"];
+  }
+};
+const spawnedArgs = bin => JSON.parse(fs.readFileSync(path.join(bin, "fake-droid-state.json"))).threadRequests.at(-1).args;
+const flagValue = (args, flag) => args.includes(flag) ? args[args.indexOf(flag) + 1] : null;
+
+test("the model-choice matrix covers exactly the model-resolving commands", () => {
+  assert.deepEqual(new Set(Object.keys(COMMAND_ARGV)), new Set(MODEL_RESOLVING_COMMANDS));
+});
+
+for (const command of MODEL_RESOLVING_COMMANDS) {
+  for (const [level, { flags, env, config, want }] of Object.entries(LEVELS)) {
+    test(`${command}: ${level} supplies -m/-r`, () => {
+      const dataDir = makeTempDir();
+      const fixture = setup({ CLAUDE_PLUGIN_DATA: dataDir, ...env }, { worker: command !== "adversarial-review" });
+      fs.writeFileSync(path.join(fixture.root, "source.txt"), "changed\n");
+      const argv = COMMAND_ARGV[command](fixture);
+      if (config) fixture.exec("setup", "--default-model", "cfg-model", "--default-effort", "medium");
+      const bin = path.dirname(fixture.env.DROID_BINARY);
+      fixture.exec(...argv, ...flags);
+      const args = spawnedArgs(bin);
+      assert.equal(flagValue(args, "-m"), want.model, `${command}/${level} -m`);
+      assert.equal(flagValue(args, "-r"), want.effort, `${command}/${level} -r`);
+      if (want.model === null) assert.ok(!args.includes("-m") && !args.includes("-r"), "no -m/-r when nothing is set");
+    });
+  }
+}
+
+test("model and effort resolve independently across env and the global defaults", () => {
+  const { exec, env } = setup({ CLAUDE_PLUGIN_DATA: makeTempDir(), DROID_DEFAULT_EFFORT: "high" });
+  exec("setup", "--default-model", "cfg-model", "--default-effort", "low");
+  exec("task", "Count rows");
+  const args = spawnedArgs(path.dirname(env.DROID_BINARY));
+  assert.deepEqual({ model: flagValue(args, "-m"), effort: flagValue(args, "-r") }, { model: "cfg-model", effort: "high" });
+});
+
+test("a default set in one workspace reaches a task in another under the same plugin data dir", () => {
+  const dataDir = makeTempDir();
+  const a = setup({ CLAUDE_PLUGIN_DATA: dataDir });
+  const text = a.exec("setup", "--default-model", "glm-5.3", "--default-effort", "high");
+  assert.match(text, /Defaults apply to all workspaces using this plugin data dir\./);
+  const b = setup({ CLAUDE_PLUGIN_DATA: dataDir });
+  assert.notEqual(a.root, b.root);
+  b.exec("task", "Count rows");
+  const args = spawnedArgs(path.dirname(b.env.DROID_BINARY));
+  assert.deepEqual({ model: flagValue(args, "-m"), effort: flagValue(args, "-r") }, { model: "glm-5.3", effort: "high" });
+  const other = setup({ CLAUDE_PLUGIN_DATA: makeTempDir() });
+  other.exec("task", "Count rows");
+  assert.equal(flagValue(spawnedArgs(path.dirname(other.env.DROID_BINARY)), "-m"), null, "another plugin data dir does not see the default");
+});
+
+test("--clear-default-model removes the default and an unknown id warns but is stored", () => {
+  const dataDir = makeTempDir();
+  const fixture = setup({ CLAUDE_PLUGIN_DATA: dataDir });
+  const run1 = run(process.execPath, [script, "setup", "--default-model", "mystery-model"], { cwd: fixture.root, env: fixture.env });
+  assert.equal(run1.status, 0, run1.stderr);
+  assert.match(run1.stderr, /not listed/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, "defaults.json"), "utf8")).model, "mystery-model");
+  const listed = run(process.execPath, [script, "setup", "--default-model", "auto", "--default-effort", "high"], { cwd: fixture.root, env: fixture.env });
+  assert.doesNotMatch(listed.stderr, /not listed/);
+  fixture.exec("setup", "--clear-default-model");
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dataDir, "defaults.json"), "utf8")), { effort: "high" });
+  fixture.exec("task", "Count rows");
+  const args = spawnedArgs(path.dirname(fixture.env.DROID_BINARY));
+  assert.deepEqual({ model: flagValue(args, "-m"), effort: flagValue(args, "-r") }, { model: null, effort: "high" });
+});
+
+test("setup rejects an invalid default effort and conflicting default flags without writing", () => {
+  const dataDir = makeTempDir();
+  const fixture = setup({ CLAUDE_PLUGIN_DATA: dataDir });
+  for (const flags of [["--default-effort", "bogus"], ["--default-model", "x", "--clear-default-model"]]) {
+    assert.notEqual(run(process.execPath, [script, "setup", ...flags], { cwd: fixture.root, env: fixture.env }).status, 0, flags.join(" "));
+  }
+  assert.ok(!fs.existsSync(path.join(dataDir, "defaults.json")));
 });

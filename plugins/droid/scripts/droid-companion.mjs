@@ -4,7 +4,7 @@ import { spawn, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { parseArgs, splitRawArgumentString } from "./lib/args.mjs";
 import {
@@ -43,6 +43,7 @@ import {
   resolveStateDir,
   resolveJobFile,
   setConfig,
+  setGlobalDefaults,
   upsertJob,
   updateState,
   writeJobFile
@@ -91,13 +92,16 @@ const TOOL_FENCE_OPTIONS = ["run-commands", "mcp-tool"];
 const WORKER_PATH_OPTIONS = ["output-schema", "result-file", "notify-socket", "mcp-config", "brief", "instructions", "preread", "worktree"];
 // Per-turn input: the resumed thread already holds the previous slice's brief and preread.
 const PER_TURN_WORKER_OPTIONS = ["brief", "preread"];
+// Commands whose spawned droid takes -m/-r from resolveModelChoice. A new one must be added here and to the model-choice test matrix.
+export const MODEL_RESOLVING_COMMANDS = ["task", "review", "adversarial-review", "compare", "verify-claims"];
+const GLOBAL_DEFAULTS_SCOPE = "Defaults apply to all workspaces using this plugin data dir.";
 const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude turn.";
 
 function printUsage() {
   console.log(
     [
       "Usage:",
-      "  node scripts/droid-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--json]",
+      "  node scripts/droid-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--default-model <id>] [--default-effort <level>] [--clear-default-model] [--json]",
       "  node scripts/droid-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
       "  node scripts/droid-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
       `  node scripts/droid-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model>] [--effort <${VALID_REASONING_EFFORTS.join("|")}>] [prompt]`,
@@ -119,7 +123,7 @@ function printUsage() {
       "Unsupported: --profile, --mcp-config, --fanout, live send steering, native transcript transfer.",
       "  --on-start|--on-progress|--on-stop-report|--on-end|--on-fail <command>",
       "Effort levels vary per model; `models` lists each model's supported levels.",
-      "Defaults: DROID_DEFAULT_MODEL and DROID_DEFAULT_EFFORT apply when --model/--effort are omitted (not on resume)."
+      "Defaults: --model/--effort, then DROID_DEFAULT_MODEL/DROID_DEFAULT_EFFORT, then `setup --default-model/--default-effort` apply when omitted (not on resume)."
     ].join("\n")
   );
 }
@@ -222,14 +226,26 @@ async function buildSetupReport(cwd, actionsTaken = []) {
   };
 }
 
+function warnIfModelUnlisted(cwd, model) {
+  if (!getDroidAvailability(cwd).available) return;
+  const help = getDroidExecHelp(cwd);
+  if (help.error || help.status !== 0) return;
+  let listed;
+  try { listed = parseDroidModels(help.stdout).models; } catch { return; }
+  if (!listed.some(entry => entry.id === model)) process.stderr.write(`model "${model}" is not listed by droid exec --help; stored anyway\n`);
+}
+
 async function handleSetup(argv) {
   const { options } = parseCommandInput(argv, {
-    valueOptions: ["cwd"],
-    booleanOptions: ["json", "enable-review-gate", "disable-review-gate"]
+    valueOptions: ["cwd", "default-model", "default-effort"],
+    booleanOptions: ["json", "enable-review-gate", "disable-review-gate", "clear-default-model"]
   });
 
   if (options["enable-review-gate"] && options["disable-review-gate"]) {
     throw new Error("Choose either --enable-review-gate or --disable-review-gate.");
+  }
+  if (options["clear-default-model"] && options["default-model"] !== undefined) {
+    throw new Error("Choose either --default-model or --clear-default-model.");
   }
 
   const cwd = resolveCommandCwd(options);
@@ -242,6 +258,18 @@ async function handleSetup(argv) {
   } else if (options["disable-review-gate"]) {
     setConfig(workspaceRoot, "stopReviewGate", false);
     actionsTaken.push(`Disabled the stop-time review gate for ${workspaceRoot}.`);
+  }
+
+  const defaultModel = normalizeRequestedModel(options["default-model"]);
+  const defaultEffort = normalizeReasoningEffort(options["default-effort"]);
+  if (options["default-model"] !== undefined && !defaultModel) throw new Error("--default-model needs a model id.");
+  if (defaultModel) warnIfModelUnlisted(cwd, defaultModel);
+  if (defaultModel || defaultEffort || options["clear-default-model"]) {
+    setGlobalDefaults({ ...(defaultModel && { model: defaultModel }), ...(options["clear-default-model"] && { model: null }), ...(defaultEffort && { effort: defaultEffort }) });
+    if (defaultModel) actionsTaken.push(`Set the default model to ${defaultModel}.`);
+    if (options["clear-default-model"]) actionsTaken.push("Cleared the default model.");
+    if (defaultEffort) actionsTaken.push(`Set the default effort to ${defaultEffort}.`);
+    actionsTaken.push(GLOBAL_DEFAULTS_SCOPE);
   }
 
   const finalReport = await buildSetupReport(cwd, actionsTaken);
@@ -1398,7 +1426,8 @@ async function main() {
   }
 }
 
-main().catch((error) => {
+const entryPoint = process.argv[1] ? pathToFileURL(fs.realpathSync(process.argv[1])).href : null;
+if (import.meta.url === entryPoint) main().catch((error) => {
   const message = error instanceof Error ? error.message : String(error);
   process.stderr.write(`${message}\n`);
   if (process.argv.includes("--json")) console.log(JSON.stringify({ error: error.code ?? "command_failed", message, retryAfter: error.retryAfter ?? null }));

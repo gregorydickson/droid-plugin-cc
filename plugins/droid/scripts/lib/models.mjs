@@ -1,3 +1,5 @@
+import { getGlobalDefaults } from "./state.mjs";
+
 /** Every level some Factory model accepts; the CLI owns which levels each model supports. */
 export const VALID_REASONING_EFFORTS = ["off", "none", "minimal", "low", "medium", "high", "xhigh", "max"];
 
@@ -13,11 +15,11 @@ export function normalizeReasoningEffort(effort) {
   return normalized;
 }
 
-/** Explicit flags win, then DROID_DEFAULT_MODEL / DROID_DEFAULT_EFFORT, then the CLI's own defaults. */
-export function resolveModelChoice(options = {}, env = process.env) {
+/** Per field: explicit flag, then DROID_DEFAULT_MODEL / DROID_DEFAULT_EFFORT, then the global defaults file, then the CLI's own default. */
+export function resolveModelChoice(options = {}, env = process.env, defaults = getGlobalDefaults()) {
   return {
-    model: normalizeRequestedModel(options.model) ?? normalizeRequestedModel(env.DROID_DEFAULT_MODEL),
-    effort: normalizeReasoningEffort(options.effort) ?? normalizeReasoningEffort(env.DROID_DEFAULT_EFFORT)
+    model: normalizeRequestedModel(options.model) ?? normalizeRequestedModel(env.DROID_DEFAULT_MODEL) ?? normalizeRequestedModel(defaults.model),
+    effort: normalizeReasoningEffort(options.effort) ?? normalizeReasoningEffort(env.DROID_DEFAULT_EFFORT) ?? normalizeReasoningEffort(defaults.effort)
   };
 }
 
