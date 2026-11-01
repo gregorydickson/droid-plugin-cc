@@ -17,6 +17,47 @@ export function getDroidAvailability(cwd) {
   const { command, prefix } = invocation();
   return binaryAvailable(command, [...prefix, "--version"], { cwd });
 }
+
+export const DROID_FEATURE_FLOOR = "1.1.0";
+const CAPABILITY_NAMES = ["tag", "systemPromptFile", "mission", "fork", "spec", "steer"];
+const versionCache = new Map();
+
+function parseSemver(text) {
+  const match = /\d+\.\d+\.\d+/.exec(text ?? "");
+  return match ? match[0] : null;
+}
+function compareSemver(a, b) {
+  const left = a.split(".").map(Number);
+  const right = b.split(".").map(Number);
+  for (let i = 0; i < 3; i++) if (left[i] !== right[i]) return left[i] - right[i];
+  return 0;
+}
+
+/** Runs `<binary> --version` once per process per binary path. */
+export function getDroidVersion(env = process.env) {
+  const { command, prefix } = invocation(env);
+  const key = [command, ...prefix, env.PATH ?? ""].join("\0");
+  if (!versionCache.has(key)) {
+    const result = runCommand(command, [...prefix, "--version"], { env });
+    const raw = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
+    versionCache.set(key, { version: parseSemver(raw), raw });
+  }
+  return versionCache.get(key);
+}
+
+/** Unparseable output counts as capable: every key true. */
+export function droidCapabilities(version) {
+  const found = parseSemver(version);
+  const capable = found === null || compareSemver(found, DROID_FEATURE_FLOOR) >= 0;
+  return Object.freeze(Object.fromEntries(CAPABILITY_NAMES.map(name => [name, capable])));
+}
+
+export function requireDroidCapability(name, version) {
+  const caps = droidCapabilities(version);
+  if (!CAPABILITY_NAMES.includes(name)) throw new Error(`Unknown Droid capability: ${name}`);
+  if (!caps[name]) throw new Error(`requires Droid CLI >= ${DROID_FEATURE_FLOOR} (found ${version})`);
+}
+
 export function getDroidExecHelp(cwd) {
   const { command, prefix } = invocation();
   return runCommand(command, [...prefix, "exec", "--help"], { cwd });

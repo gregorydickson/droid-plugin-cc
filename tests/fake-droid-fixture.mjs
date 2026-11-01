@@ -23,7 +23,7 @@ const BEHAVIOR = ${JSON.stringify(behavior)};
 const WORKER = ${JSON.stringify(worker)};
 const args = process.argv.slice(2);
 const arg = flag => args[args.indexOf(flag) + 1];
-if (args[0] === "--version") { console.log("droid-cli test"); process.exit(0); }
+if (args[0] === "--version") { console.log("droid-cli test " + (process.env.FAKE_DROID_VERSION ?? "1.1.0")); process.exit(0); }
 if (args[0] === "exec" && args.includes("--help")) { process.stdout.write(fs.readFileSync(${JSON.stringify(HELP_FIXTURE)}, "utf8")); process.exit(0); }
 const FORMAT = arg("--output-format");
 if (args[0] !== "exec" || !["stream-jsonrpc", "stream-json"].includes(FORMAT)) process.exit(2);

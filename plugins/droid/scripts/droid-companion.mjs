@@ -15,6 +15,9 @@ import {
     getDroidAvailability,
     getDroidExecHelp,
     getSessionRuntimeStatus,
+    DROID_FEATURE_FLOOR,
+    droidCapabilities,
+    getDroidVersion,
     importExternalAgentSession,
     interruptDroidTurn,
     normalizeMcpToolSelector,
@@ -193,8 +196,13 @@ async function buildSetupReport(cwd, actionsTaken = []) {
   const config = getConfig(workspaceRoot);
 
   const nextSteps = [];
+  const droidVersion = droidStatus.available ? getDroidVersion().version : null;
   if (!droidStatus.available) {
     nextSteps.push("Install the Factory Droid CLI from https://docs.factory.ai/cli/getting-started/overview.");
+  } else if (droidVersion === null) {
+    nextSteps.push(`Could not parse the Droid CLI version; assuming it supports 1.1.0 features (floor ${DROID_FEATURE_FLOOR}).`);
+  } else if (!Object.values(droidCapabilities(droidVersion)).every(Boolean)) {
+    nextSteps.push(`Droid CLI ${droidVersion} is below ${DROID_FEATURE_FLOOR}; upgrade to use tags, mission, fork, spec and steering.`);
   }
   if (droidStatus.available) nextSteps.push("Authentication is checked during execution. Use /login in Droid or FACTORY_API_KEY if needed.");
   if (!config.stopReviewGate) {
@@ -204,7 +212,7 @@ async function buildSetupReport(cwd, actionsTaken = []) {
   return {
     ready: nodeStatus.available && droidStatus.available,
     node: nodeStatus,
-    droid: droidStatus,
+    droid: { ...droidStatus, version: droidVersion },
     auth: authStatus,
     sessionRuntime: getSessionRuntimeStatus(process.env, workspaceRoot),
     reviewGateEnabled: Boolean(config.stopReviewGate),
