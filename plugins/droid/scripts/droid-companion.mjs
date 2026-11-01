@@ -487,7 +487,7 @@ async function executeReviewRun(request) {
   }
 
   const context = collectReviewContext(request.cwd, target);
-  const prompt = [buildAdversarialReviewPrompt(context, focusText), request.briefText, request.inputContext].filter(Boolean).join("\n\n");
+  const prompt = buildAdversarialReviewPrompt(context, focusText);
   const result = await runDroidTurn(context.repoRoot, {
     ...request,
     prompt,
