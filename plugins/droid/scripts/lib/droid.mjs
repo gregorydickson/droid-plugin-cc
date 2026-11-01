@@ -244,20 +244,34 @@ export function normalizeMcpToolSelector(value) {
  * five because the lane wrapper refuses any run-commands --only-tools member
  * outside Read, LS, Grep, Glob and Execute. A schema-repair turn is default
  * autonomy over REPAIR_TOOLS with no MCP selectors. Workspace-write is --auto
- * medium over droid's default toolset.
+ * medium over droid's default toolset. A mission turn (never a repair) is
+ * --mission --auto high on stream-json, because droid rejects --mission on a
+ * one-shot stream-jsonrpc exec (docs/missions.md). It carries no tool fence and
+ * always names the worker and validator models, since droid's own default for
+ * them is not the plugin's.
  */
 export function buildDroidExecArgs(cwd, file, options = {}) {
   const resume = Boolean(options.resumeThreadId);
   const fork = Boolean(options.forkThreadId) && !options.repair;
   if (options.tag && !JOB_KINDS.includes(options.tag.kind)) throw new Error(`Unknown job kind "${options.tag.kind}"`);
-  const args = ["exec", "--output-format", resume || fork ? "stream-json" : "stream-jsonrpc", "--cwd", cwd, "-f", file];
+  const mission = Boolean(options.mission) && !options.repair;
+  const args = ["exec", "--output-format", resume || fork || mission ? "stream-json" : "stream-jsonrpc", "--cwd", cwd, "-f", file];
   const sandbox = options.repair ? "read-only" : options.sandbox;
   const mcpSelectors = options.repair ? [] : (options.mcpTools ?? []).map(selector => `MCP:${normalizeMcpToolSelector(selector)}`);
-  if (sandbox === "workspace-write" || sandbox === "run-commands") args.push("--auto", "medium");
-  if (sandbox !== "workspace-write") args.push("--only-tools", [...(options.repair ? REPAIR_TOOLS : sandbox === "run-commands" ? RUN_COMMANDS_TOOLS : readOnlyTools(options)), ...mcpSelectors].join(","));
-  else if (mcpSelectors.length) args.push("--add-tools", mcpSelectors.join(","));
+  if (mission) args.push("--mission", "--auto", "high");
+  else {
+    if (sandbox === "workspace-write" || sandbox === "run-commands") args.push("--auto", "medium");
+    if (sandbox !== "workspace-write") args.push("--only-tools", [...(options.repair ? REPAIR_TOOLS : sandbox === "run-commands" ? RUN_COMMANDS_TOOLS : readOnlyTools(options)), ...mcpSelectors].join(","));
+    else if (mcpSelectors.length) args.push("--add-tools", mcpSelectors.join(","));
+  }
   if (options.model) args.push("-m", options.model);
   if (options.effort) args.push("-r", options.effort);
+  if (mission) {
+    for (const [flag, value] of [
+      ["--worker-model", options.workerModel ?? options.model], ["--validator-model", options.validatorModel ?? options.model],
+      ["--worker-reasoning-effort", options.workerEffort ?? options.effort], ["--validator-reasoning-effort", options.validatorEffort ?? options.effort]
+    ]) if (value != null) args.push(flag, value);
+  }
   if (options.spec && !options.repair) {
     args.push("--use-spec");
     if (options.specModel) args.push("--spec-model", options.specModel);

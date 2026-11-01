@@ -49,6 +49,10 @@ if (FORMAT === "stream-jsonrpc" && arg("--input-format") !== "stream-jsonrpc") {
     process.exit(1);
   }
 }
+if (args.includes("--mission") && FORMAT !== "stream-json") {
+  process.stderr.write("Invalid flags: --mission is not supported with one-shot --output-format stream-jsonrpc. Use --output-format stream-json, or drive the session with --input-format stream-jsonrpc.\\n");
+  process.exit(1);
+}
 const prompt = fs.readFileSync(arg("-f"), "utf8");
 const state = fs.existsSync(STATE_PATH) ? JSON.parse(fs.readFileSync(STATE_PATH)) : { threads: [], threadRequests: [], execStarts: 0 };
 state.execStarts++;
@@ -90,6 +94,15 @@ if (BEHAVIOR === "stubborn-task") {
 }
 else if (BEHAVIOR === "malformed") { console.log("not JSON"); setTimeout(() => {}, 10000); }
 else if (BEHAVIOR === "no-completion") process.exit(0);
+else if (args.includes("--mission")) {
+  // The event sequence recorded in docs/missions.md: user echo, reasoning, a tool call and its result, the assistant message, then one completion.
+  line({ type: "message", role: "user", id: "echo", text: prompt });
+  line({ type: "reasoning", id: "think", text: "Plan the mission." });
+  line({ type: "tool_call", id: "call-1", toolId: "Create", toolName: "Create", parameters: { file_path: "hello.txt" } });
+  line({ type: "tool_result", id: "call-1", toolId: "Create", isError: false, value: "created" });
+  line({ type: "message", role: "assistant", id: "final", text: "Mission finished." });
+  line({ type: "completion", finalText: "Mission finished.", numTurns: 1, usage: { input_tokens: 1, output_tokens: 1 } });
+}
 else {
 let payload;
 const paused = prompt.includes("NEED_ANSWER") && !prompt.includes("Answer to your stop report:");
