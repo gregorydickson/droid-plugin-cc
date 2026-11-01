@@ -65,3 +65,29 @@ test("AC7.3 live: this machine's Droid is logged in and verified", { skip: proce
   assert.equal(auth.loggedIn, true);
   assert.equal(auth.verified, true);
 });
+
+function setupDefaults(env, defaultsFileContent) {
+  const root = makeTempDir(); initGitRepo(root);
+  const bin = makeTempDir(); installFakeDroid(bin);
+  const dataDir = makeTempDir();
+  if (defaultsFileContent) fs.writeFileSync(`${dataDir}/defaults.json`, JSON.stringify(defaultsFileContent));
+  const full = { ...buildEnv(bin), DROID_HOME: makeTempDir(), CLAUDE_PLUGIN_DATA: dataDir, ...env };
+  const text = run(process.execPath, [script, "setup"], { cwd: root, env: full }).stdout;
+  const report = JSON.parse(run(process.execPath, [script, "setup", "--json"], { cwd: root, env: full }).stdout);
+  return { text, report };
+}
+
+test("setup labels a default read from defaults.json with the file, not an env var", () => {
+  const { text, report } = setupDefaults({ DROID_DEFAULT_MODEL: "", DROID_DEFAULT_EFFORT: "" }, { model: "glm-5.3", effort: "high" });
+  assert.match(text, /- default model: glm-5\.3 \(defaults\.json\)/);
+  assert.match(text, /- default effort: high \(defaults\.json\)/);
+  assert.doesNotMatch(text, /DROID_DEFAULT_(MODEL|EFFORT)\)/);
+  assert.deepEqual(report.defaultSources, { model: "defaults.json", effort: "defaults.json" });
+});
+
+test("setup labels an env default with its variable, and mixes sources per field", () => {
+  const { text, report } = setupDefaults({ DROID_DEFAULT_MODEL: "env-model", DROID_DEFAULT_EFFORT: "" }, { model: "glm-5.3", effort: "high" });
+  assert.match(text, /- default model: env-model \(DROID_DEFAULT_MODEL\)/);
+  assert.match(text, /- default effort: high \(defaults\.json\)/);
+  assert.deepEqual(report.defaultSources, { model: "DROID_DEFAULT_MODEL", effort: "defaults.json" });
+});

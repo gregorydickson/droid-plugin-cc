@@ -196,13 +196,16 @@ function firstMeaningfulLine(text, fallback) {
   return line ?? fallback;
 }
 
+const ENV_DEFAULT_NAMES = { model: "DROID_DEFAULT_MODEL", effort: "DROID_DEFAULT_EFFORT" };
+
 async function buildSetupReport(cwd, actionsTaken = []) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const nodeStatus = binaryAvailable(process.execPath, ["--version"], { cwd });
   const droidStatus = getDroidAvailability(cwd);
   const authStatus = await getDroidAuthStatus(cwd);
   const config = getConfig(workspaceRoot);
-
+  const defaults = resolveModelChoice();
+  const fromEnv = resolveModelChoice({}, process.env, {});
   const nextSteps = [];
   const droidVersion = droidStatus.available ? getDroidVersion().version : null;
   if (!droidStatus.available) {
@@ -228,7 +231,8 @@ async function buildSetupReport(cwd, actionsTaken = []) {
     auth: authStatus,
     sessionRuntime: getSessionRuntimeStatus(process.env, workspaceRoot),
     reviewGateEnabled: Boolean(config.stopReviewGate),
-    defaults: resolveModelChoice(),
+    defaults,
+    defaultSources: Object.fromEntries(["model", "effort"].map(field => [field, !defaults[field] ? null : fromEnv[field] ? ENV_DEFAULT_NAMES[field] : "defaults.json"])),
     actionsTaken,
     nextSteps
   };

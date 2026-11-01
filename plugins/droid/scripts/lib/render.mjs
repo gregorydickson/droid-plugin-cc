@@ -207,8 +207,8 @@ export function renderSetupReport(report) {
     `- auth: ${report.auth.detail}`,
     `- session runtime: ${report.sessionRuntime.label}`,
     `- review gate: ${report.reviewGateEnabled ? "enabled" : "disabled"}`,
-    `- default model: ${report.defaults?.model ?? "CLI default"}${report.defaults?.model ? " (DROID_DEFAULT_MODEL)" : ""}`,
-    `- default effort: ${report.defaults?.effort ?? "model default"}${report.defaults?.effort ? " (DROID_DEFAULT_EFFORT)" : ""}`,
+    `- default model: ${report.defaults?.model ?? "CLI default"}${report.defaults?.model ? ` (${report.defaultSources?.model})` : ""}`,
+    `- default effort: ${report.defaults?.effort ?? "model default"}${report.defaults?.effort ? ` (${report.defaultSources?.effort})` : ""}`,
     ""
   ];
 
