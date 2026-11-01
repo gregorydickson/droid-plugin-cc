@@ -31,7 +31,7 @@ import { readWorkerContext, STOP_REPORT_INSTRUCTIONS, fieldDisagreements } from 
 import { resultEnvelope, validateOutputSchema } from "./lib/job-results.mjs";
 import { validateWorktree } from "./lib/worktree-jobs.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
-import { normalizeRequestedModel, normalizeReasoningEffort, parseDroidModels, renderModelsTable, resolveModelChoice, VALID_REASONING_EFFORTS } from "./lib/models.mjs";
+import { effortWarning, isLatestAlias, normalizeRequestedModel, normalizeReasoningEffort, parseDroidModels, renderModelsTable, resolveModelChoice, VALID_REASONING_EFFORTS } from "./lib/models.mjs";
 import { collectReviewContext, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
 import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
@@ -226,13 +226,20 @@ async function buildSetupReport(cwd, actionsTaken = []) {
   };
 }
 
-function warnIfModelUnlisted(cwd, model) {
-  if (!getDroidAvailability(cwd).available) return;
+function cachedParsedModels(cwd) {
+  if (!getDroidAvailability(cwd).available) return null;
   const help = getDroidExecHelp(cwd);
-  if (help.error || help.status !== 0) return;
-  let listed;
-  try { listed = parseDroidModels(help.stdout).models; } catch { return; }
-  if (!listed.some(entry => entry.id === model)) process.stderr.write(`model "${model}" is not listed by droid exec --help; stored anyway\n`);
+  if (help.error || help.status !== 0) return null;
+  try { return parseDroidModels(help.stdout); } catch { return null; }
+}
+
+function warnIfModelUnlisted(parsed, model) {
+  if (parsed && !isLatestAlias(model, parsed) && !parsed.models.some(entry => entry.id === model)) process.stderr.write(`model "${model}" is not listed by droid exec --help; stored anyway\n`);
+}
+
+function warnIfEffortUnlisted(parsed, model, effort) {
+  const warning = effortWarning(model, effort, parsed);
+  if (warning) process.stderr.write(`${warning}\n`);
 }
 
 async function handleSetup(argv) {
@@ -263,7 +270,11 @@ async function handleSetup(argv) {
   const defaultModel = normalizeRequestedModel(options["default-model"]);
   const defaultEffort = normalizeReasoningEffort(options["default-effort"]);
   if (options["default-model"] !== undefined && !defaultModel) throw new Error("--default-model needs a model id.");
-  if (defaultModel) warnIfModelUnlisted(cwd, defaultModel);
+  if (defaultModel || defaultEffort) {
+    const parsed = cachedParsedModels(cwd);
+    if (defaultModel) warnIfModelUnlisted(parsed, defaultModel);
+    warnIfEffortUnlisted(parsed, defaultModel ?? resolveModelChoice().model, defaultEffort);
+  }
   if (defaultModel || defaultEffort || options["clear-default-model"]) {
     setGlobalDefaults({ ...(defaultModel && { model: defaultModel }), ...(options["clear-default-model"] && { model: null }), ...(defaultEffort && { effort: defaultEffort }) });
     if (defaultModel) actionsTaken.push(`Set the default model to ${defaultModel}.`);
@@ -1360,6 +1371,7 @@ function handleModels(argv) {
   const help = getDroidExecHelp(cwd);
   if (help.error || help.status !== 0) throw new Error(`droid exec --help failed: ${help.error?.message ?? (help.stderr.trim() || `exit ${help.status}`)}`);
   const report = { ...parseDroidModels(help.stdout), defaults: resolveModelChoice() };
+  warnIfEffortUnlisted(report, report.defaults.model, report.defaults.effort);
   outputCommandResult(report, renderModelsTable(report, report.defaults), options.json);
 }
 

@@ -30,6 +30,37 @@ function helpSection(lines, title) {
   return lines.slice(start + 1, end === -1 ? undefined : end).filter(line => line.trim());
 }
 
+/** "Pinning the Latest Model:" lists `prefix-{a,b}` tier lines and one comma-separated line of version wildcards. */
+function parseAliases(lines) {
+  return (helpSection(lines, "Pinning the Latest Model") ?? []).flatMap(line => {
+    const text = line.trim();
+    const tier = /^([\w.-]+)-\{([^}]+)\}$/.exec(text);
+    if (tier) return tier[2].split(",").map(member => ({ id: `${tier[1]}-${member.trim()}`, kind: "tier" }));
+    const tokens = text.replace(/^.*?:\s+/, "").split(",").map(token => token.trim());
+    const isWildcardList = tokens.every(token => /^[\w.*-]+$/.test(token)) && tokens.some(token => /^[\w.-]*\*[\w.*-]*$/.test(token) && token !== "*");
+    return isWildcardList ? tokens.map(id => ({ id, kind: "wildcard" })) : [];
+  });
+}
+
+/** `*` stands for a version number only (`claude-opus-*` never selects `claude-opus-5-5-fast`). */
+function wildcardPattern(id) {
+  return new RegExp(`^${id.split("*").map(part => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join("\\d+(?:[.-]\\d+)*")}$`);
+}
+
+/** True when the id is a tier alias or matches a version wildcard from the help's "Pinning the Latest Model" section. */
+export function isLatestAlias(modelId, { aliases = [] } = {}) {
+  return aliases.some(alias => alias.id === modelId || (alias.kind === "wildcard" && wildcardPattern(alias.id).test(modelId)));
+}
+
+/** A warning (never a throw) when a listed model's help does not list the requested effort. A listed id is a concrete model even if a wildcard also matches it; aliases, wildcards, unknown ids and models listing no efforts get null. */
+export function effortWarning(modelId, effort, parsed) {
+  const normalized = effort == null ? "" : String(effort).trim().toLowerCase();
+  if (!modelId || !normalized || !parsed) return null;
+  const model = parsed.models?.find(entry => entry.id === modelId);
+  if (!model?.efforts?.length || model.efforts.includes(normalized)) return null;
+  return `effort "${normalized}" is not listed for ${modelId} (listed: ${model.efforts.join(", ")}); passing it anyway`;
+}
+
 /** Parse `droid exec --help`: "Available Models:" rows are `id  Name`, "Model details:" rows are keyed by Name. */
 export function parseDroidModels(helpText) {
   const lines = String(helpText ?? "").split(/\r?\n/);
@@ -52,10 +83,10 @@ export function parseDroidModels(helpText) {
   });
   if (!listed.length) throw new Error("droid exec --help listed no models under \"Available Models:\".");
   const defaultModel = /--model <id>.*\(default:\s*([^)\s]+)\)/.exec(helpText)?.[1] ?? listed.find(model => model.marked)?.id ?? null;
-  return { defaultModel, models: listed.map(({ marked, ...model }) => ({ ...model, isDefault: model.id === defaultModel })) };
+  return { defaultModel, models: listed.map(({ marked, ...model }) => ({ ...model, isDefault: model.id === defaultModel })), aliases: parseAliases(lines) };
 }
 
-export function renderModelsTable({ defaultModel, models }, defaults = {}) {
+export function renderModelsTable({ defaultModel, models, aliases = [] }, defaults = {}) {
   const cell = value => String(value ?? "").replace(/\|/g, "\\|");
   const lines = ["# Droid Models", "", `CLI default model: ${defaultModel ?? "unknown"}`];
   if (defaults.model || defaults.effort) lines.push(`Plugin defaults: model ${defaults.model ?? "(CLI default)"}, effort ${defaults.effort ?? "(model default)"}`);
@@ -64,5 +95,6 @@ export function renderModelsTable({ defaultModel, models }, defaults = {}) {
     const efforts = model.efforts == null ? "unknown" : model.supportsReasoning ? model.efforts.join(", ") : "not supported";
     lines.push(`| ${cell(model.id)}${model.isDefault ? " (default)" : ""} | ${cell(model.name)} | ${cell(efforts)} | ${cell(model.defaultEffort ?? "")} |`);
   }
+  if (aliases.length) lines.push("", "Latest-model aliases:", ...aliases.map(alias => `- ${cell(alias.id)} (${alias.kind})`));
   return `${lines.join("\n")}\n`;
 }
