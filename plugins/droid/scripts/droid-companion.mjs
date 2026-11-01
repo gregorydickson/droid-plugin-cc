@@ -18,6 +18,7 @@ import {
     DROID_FEATURE_FLOOR,
     droidCapabilities,
     getDroidVersion,
+    requireDroidCapability,
     importExternalAgentSession,
     interruptDroidTurn,
     normalizeMcpToolSelector,
@@ -925,16 +926,27 @@ function reserveNamedJob(job) {
   });
 }
 
+/** Spec mode is per turn: validated here, carried on a fresh task's request, never replayed on resume. */
+function resolveSpecOptions(options) {
+  if (!options.spec) {
+    if (options["spec-model"] != null || options["spec-effort"] != null) throw new Error("--spec-model and --spec-effort require --spec.");
+    return {};
+  }
+  requireDroidCapability("spec", getDroidVersion().version);
+  return { spec: true, specModel: options["spec-model"] ?? null, specEffort: normalizeReasoningEffort(options["spec-effort"]) };
+}
+
 async function handleTask(argv) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["model", "effort", "cwd", "prompt-file", ...WORKER_VALUE_OPTIONS],
+    valueOptions: ["model", "effort", "cwd", "prompt-file", "spec-model", "spec-effort", ...WORKER_VALUE_OPTIONS],
     repeatedOptions: ["instructions", "preread", "mcp-tool"],
-    booleanOptions: ["json", "write", "resume-last", "resume", "fresh", "background", ...WORKER_BOOLEAN_OPTIONS],
+    booleanOptions: ["json", "write", "resume-last", "resume", "fresh", "background", "spec", ...WORKER_BOOLEAN_OPTIONS],
     aliasMap: { m: "model" }
   });
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const resumeLast = Boolean(options["resume-last"] || options.resume);
+  const spec = resolveSpecOptions(options);
   if (resumeLast && options.fresh) throw new Error("Choose either --resume/--resume-last or --fresh.");
   if (resumeLast) {
     const latest = await resolveLatestTrackedTaskThread(cwd);
@@ -949,7 +961,7 @@ async function handleTask(argv) {
   const taskMetadata = buildTaskRunMetadata({ prompt, resumeLast });
   const job = { ...buildTaskJob(workspaceRoot, taskMetadata, write), ...worker, model, effort };
 
-  const request = { ...buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId: job.id }), ...worker };
+  const request = { ...buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId: job.id }), ...worker, ...(resumeLast ? {} : spec) };
   job.request = request;
   if (options.background) ensureDroidAvailable(cwd);
   reserveNamedJob(job);
@@ -1218,7 +1230,7 @@ async function handleSessions(argv) {
  * result file belongs to the job that wrote it, while a {jobId} pattern carries over.
  */
 async function resumedRequest(previous, options) {
-  const base = previous.request;
+  const { spec, specModel, specEffort, ...base } = previous.request;
   if (options.answering) return { request: base, worker: {} };
   const explicit = absoluteWorkerArgs(options.overrideCwd ?? base.cwd, options);
   if (options.worktree) explicit.worktree = options.overrideCwd;

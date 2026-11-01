@@ -5,6 +5,7 @@ import { createInterface } from "node:readline";
 import { createTempDir, readJsonFile } from "./fs.mjs";
 import { binaryAvailable, runCommand, terminateProcessTree } from "./process.mjs";
 import { validateOutputSchema } from "./job-results.mjs";
+import { normalizeReasoningEffort } from "./models.mjs";
 
 export const DEFAULT_CONTINUE_PROMPT = "Continue from the current thread state. Pick the next highest-value step and follow through until the task is resolved.";
 export const TASK_THREAD_PREFIX = "Droid Companion Task";
@@ -193,6 +194,12 @@ export function buildDroidExecArgs(cwd, file, options = {}) {
   else if (mcpSelectors.length) args.push("--add-tools", mcpSelectors.join(","));
   if (options.model) args.push("-m", options.model);
   if (options.effort) args.push("-r", options.effort);
+  if (options.spec && !options.repair) {
+    args.push("--use-spec");
+    if (options.specModel) args.push("--spec-model", options.specModel);
+    const specEffort = normalizeReasoningEffort(options.specEffort);
+    if (specEffort) args.push("--spec-reasoning-effort", specEffort);
+  }
   if (resume) args.push("--session-id", options.resumeThreadId);
   if (options.systemPromptFile && !options.repair) args.push("--append-system-prompt-file", options.systemPromptFile);
   if (options.tag && !options.steerable && droidCapabilities(getDroidVersion(options.env ?? process.env).version).tag) {

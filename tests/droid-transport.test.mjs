@@ -214,7 +214,7 @@ function taggedRepo() {
     assert.deepEqual(extra, []);
     return { job, args: requests().slice(before).at(-1).args };
   };
-  return { invoke };
+  return { invoke, repo, bin };
 }
 
 for (const [label, argv, kind] of [
@@ -260,4 +260,69 @@ test("an unknown job kind throws before spawn", async t => {
   assert.throws(() => buildDroidExecArgs("/x", "/f", { tag: { jobId: "task-abc", kind: "rescue" } }), /Unknown job kind "rescue"/);
   await assert.rejects(runDroidTurn(makeTempDir(), { prompt: "Count", tag: { jobId: "task-abc", kind: "rescue" } }), /Unknown job kind/);
   assert.ok(!fs.existsSync(path.join(path.dirname(process.env.DROID_BINARY), "fake-droid-state.json")), "droid was never spawned");
+});
+
+const SPEC_FLAGS = ["--use-spec", "--spec-model", "--spec-reasoning-effort"];
+const flagValue = (args, flag) => args[args.indexOf(flag) + 1];
+
+test("task --spec maps to Droid spec mode and a plain task spawns none of its flags", () => {
+  const { invoke } = taggedRepo();
+  const { args } = invoke("task", "--spec", "--spec-model", "glm-5.3", "--spec-effort", "high", "plan it");
+  assert.ok(args.includes("--use-spec"));
+  assert.equal(flagValue(args, "--spec-model"), "glm-5.3");
+  assert.equal(flagValue(args, "--spec-reasoning-effort"), "high");
+  const plain = invoke("task", "plan it").args;
+  for (const flag of SPEC_FLAGS) assert.ok(!plain.includes(flag), flag);
+});
+
+test("task --spec alone passes only --use-spec, and an invalid spec effort is rejected", () => {
+  const { invoke, repo, bin } = taggedRepo();
+  const { args } = invoke("task", "--spec", "plan it");
+  assert.ok(args.includes("--use-spec"));
+  assert.ok(!args.includes("--spec-model") && !args.includes("--spec-reasoning-effort"));
+  const bad = run("node", [COMPANION, "task", "--spec", "--spec-effort", "loud", "plan it"], { cwd: repo, env: buildEnv(bin) });
+  assert.equal(bad.status, 1);
+  assert.match(bad.stderr, /Unsupported reasoning effort "loud"/);
+});
+
+test("a schema repair turn never carries the spec flags", async t => {
+  const state = fixture(t, "repair-once");
+  await runDroidTurn(makeTempDir(), { prompt: "Count", outputSchema: schema, spec: true, specModel: "glm-5.3", specEffort: "high" });
+  const [first, repair] = state().threadRequests;
+  assert.deepEqual([first.method, repair.method], ["start", "resume"]);
+  for (const flag of SPEC_FLAGS) { assert.ok(first.args.includes(flag), flag); assert.ok(!repair.args.includes(flag), flag); }
+});
+
+test("resuming a spec job, by --resume-last or sessions resume, replays none of the spec flags", () => {
+  const { invoke } = taggedRepo();
+  invoke("task", "--spec", "--spec-model", "glm-5.3", "--spec-effort", "high", "--name", "specjob", "plan it");
+  const sessionResume = invoke("sessions", "resume", "specjob", "follow up").args;
+  for (const flag of SPEC_FLAGS) assert.ok(!sessionResume.includes(flag), flag);
+  const last = invoke("task", "--spec", "--spec-model", "glm-5.3", "plan again");
+  assert.ok(last.args.includes("--use-spec"));
+  const lastResume = invoke("task", "--resume-last", "--spec", "--spec-model", "glm-5.3", "follow up").args;
+  for (const flag of SPEC_FLAGS) assert.ok(!lastResume.includes(flag), flag);
+});
+
+test("task --spec --json has the same top-level keys as task --json", () => {
+  const { repo, bin } = taggedRepo();
+  const keys = (...argv) => {
+    const result = run("node", [COMPANION, "task", ...argv, "--json", "plan it"], { cwd: repo, env: buildEnv(bin) });
+    assert.equal(result.status, 0, result.stderr);
+    return Object.keys(JSON.parse(result.stdout)).sort();
+  };
+  assert.deepEqual(keys("--spec", "--spec-model", "glm-5.3"), keys());
+});
+
+test("--spec-model and --spec-effort require --spec, and --spec honours the Droid version floor", () => {
+  const { repo, bin } = taggedRepo();
+  const exec = (argv, env = {}) => run("node", [COMPANION, "task", ...argv, "plan it"], { cwd: repo, env: { ...buildEnv(bin), ...env } });
+  for (const argv of [["--spec-model", "glm-5.3"], ["--spec-effort", "high"]]) {
+    const result = exec(argv);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /--spec-model and --spec-effort require --spec\./);
+  }
+  const old = exec(["--spec"], { FAKE_DROID_VERSION: "0.238.0" });
+  assert.equal(old.status, 1);
+  assert.match(old.stderr, /requires Droid CLI >= 1\.1\.0 \(found 0\.238\.0\)/);
 });
