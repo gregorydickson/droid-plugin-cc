@@ -105,7 +105,7 @@ test("answer keeps the paused job's id, thread, write access, lock, and result-f
   const requests = ctx.fake().threadRequests;
   assert.deepEqual(pick(requests.at(-1), THREAD_FIELDS), pick(requests.find(entry => entry.method === "start"), THREAD_FIELDS));
   assert.ok(requests.at(-1).args.includes("medium"));
-  assert.match(ctx.fake().lastTurnStart.prompt, /Never push\.[\s\S]*JSON stop report/);
+  assert.match(ctx.fake().lastTurnStart.systemPrompt, /Never push\.[\s\S]*JSON stop report/);
   assert.deepEqual(ctx.lockEvents(), ["lock", "unlock", "lock", "unlock"]);
   assert.equal(JSON.parse(fs.readFileSync(published, "utf8")).status, "completed");
 });
@@ -114,9 +114,9 @@ test("a resume never re-sends the previous slice's brief or preread", () => {
   const ctx = setup("brief-sentinel");
   ctx.start();
   ctx.cli("sessions", "resume", "slice-one", "Next slice");
-  const prompt = ctx.fake().lastTurnStart.prompt;
-  assert.match(prompt, /\nNext slice\n/);
-  assert.doesNotMatch(prompt, /brief-sentinel|plan-sentinel/);
+  const { prompt, systemPrompt } = ctx.fake().lastTurnStart;
+  assert.match(prompt, /^Next slice\n/);
+  for (const sent of [prompt, systemPrompt]) assert.doesNotMatch(sent, /brief-sentinel|plan-sentinel/);
 });
 
 test("resume flags override the inherited options", () => {

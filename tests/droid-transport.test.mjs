@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
@@ -128,4 +129,62 @@ test("asynchronous progress rejection remains a warning", async t => {
   const result = await runDroidTurn(makeTempDir(), { prompt: "Count", onProgress: async () => { throw new Error("async lock timeout"); } });
   assert.equal(result.status, 0);
   assert.ok(result.warnings.some(w => /async lock timeout/.test(w.message)));
+});
+
+const FLAG = "--append-system-prompt-file";
+const flagPath = args => args[args.indexOf(FLAG) + 1];
+
+test("developer instructions travel in the system prompt file, not the prompt, and the temp dir is removed", async t => {
+  const state = fixture(t);
+  const text = "Always answer in haiku.";
+  const result = await runDroidTurn(makeTempDir(), { prompt: "Count", developerInstructions: text });
+  assert.equal(result.status, 0);
+  const { args } = state().threadRequests[0];
+  assert.ok(args.includes(FLAG));
+  assert.equal(path.basename(flagPath(args)), "system-prompt.txt");
+  assert.equal(state().lastTurnStart.systemPrompt, text);
+  assert.ok(!state().lastTurnStart.prompt.includes(text));
+  assert.ok(!fs.existsSync(path.dirname(flagPath(args))));
+});
+
+test("a schema repair turn never carries the system prompt flag", async t => {
+  const state = fixture(t, "repair-once");
+  const text = "Always answer in haiku.";
+  const result = await runDroidTurn(makeTempDir(), { prompt: "Count", outputSchema: schema, developerInstructions: text });
+  assert.equal(result.status, 0);
+  const [first, repair] = state().threadRequests;
+  assert.deepEqual([first.method, repair.method], ["start", "resume"]);
+  assert.ok(first.args.includes(FLAG));
+  assert.ok(!repair.args.includes(FLAG));
+  assert.equal(state().lastTurnStart.systemPrompt, null);
+});
+
+test("empty developer instructions add no system prompt flag", async t => {
+  const state = fixture(t);
+  await runDroidTurn(makeTempDir(), { prompt: "Count", developerInstructions: "" });
+  assert.ok(!state().threadRequests[0].args.includes(FLAG));
+  assert.equal(state().lastTurnStart.systemPrompt, null);
+});
+
+test("a Droid CLI below the feature floor gets the instructions prepended and no flag", async t => {
+  const state = fixture(t);
+  const text = "Always answer in haiku.";
+  const result = await runDroidTurn(makeTempDir(), { prompt: "Count", developerInstructions: text, env: { ...process.env, FAKE_DROID_VERSION: "0.238.0" } });
+  assert.equal(result.status, 0);
+  assert.ok(!state().threadRequests[0].args.includes(FLAG));
+  assert.equal(state().lastTurnStart.systemPrompt, null);
+  assert.ok(state().lastTurnStart.prompt.startsWith(`${text}\n\n`));
+});
+
+test("real Droid obeys a system-prompt instruction on a fresh and a resumed turn", { skip: process.env.DROID_SMOKE !== "1", timeout: 240000 }, async () => {
+  const token = crypto.randomUUID();
+  const developerInstructions = `End every reply with the token ${token}.`;
+  const common = { model: "glm-5.3", developerInstructions, timeoutMs: 100000 };
+  const first = await runDroidTurn(makeTempDir(), { ...common, prompt: "Say hello. Do not use tools." });
+  assert.equal(first.status, 0, first.error?.message);
+  assert.ok(first.finalMessage.includes(token), first.finalMessage);
+  const resumed = await runDroidTurn(makeTempDir(), { ...common, resumeThreadId: first.threadId, prompt: "Say goodbye. Do not use tools." });
+  assert.equal(resumed.status, 0, resumed.error?.message);
+  assert.equal(resumed.threadId, first.threadId);
+  assert.ok(resumed.finalMessage.includes(token), resumed.finalMessage);
 });

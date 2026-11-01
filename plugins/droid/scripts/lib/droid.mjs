@@ -116,14 +116,17 @@ export async function runDroidTurn(cwd, options = {}) {
   const validate = schema != null ? validateOutputSchema(schema) : null;
   if (schema != null) prompt += `\n\nReturn only JSON matching this JSON schema (no Markdown fences):\n${JSON.stringify(schema)}`;
   if (options.pauseAndAsk && schema != null) prompt += '\nUse state "completed" with result populated, null question/draftAnswer and empty facts/itemsHeld; or state "awaiting-answer" with result null and a specific question, draftAnswer, facts and itemsHeld.';
-  if (options.developerInstructions) prompt = `${options.developerInstructions}\n\n${prompt}`;
-  let result = await executeTurn(cwd, { ...options, prompt });
+  const instructions = options.developerInstructions;
+  const instructionsInSystemPrompt = Boolean(instructions) && droidCapabilities(getDroidVersion(options.env ?? process.env).version).systemPromptFile;
+  if (instructions && !instructionsInSystemPrompt) prompt = `${instructions}\n\n${prompt}`;
+  const turnOptions = { ...options, systemPromptText: instructionsInSystemPrompt ? instructions : undefined };
+  let result = await executeTurn(cwd, { ...turnOptions, prompt });
   if (validate && result.status === 0) {
     let valid;
     try { valid = validate(JSON.parse(result.finalMessage)); } catch { valid = false; }
     if (!valid) {
       const firstUsage = result.usage;
-      result = await executeTurn(cwd, { ...options, resumeThreadId: result.threadId,
+      result = await executeTurn(cwd, { ...turnOptions, resumeThreadId: result.threadId,
         prompt: `Your previous answer did not match the required JSON schema. Return corrected JSON only, without tools or further task work.\nSchema: ${JSON.stringify(schema)}\nValidation errors: ${JSON.stringify(validate.errors)}\nPrevious answer: ${result.finalMessage}`, repair: true });
       // A continued turn reports session-inclusive usage, which already counts the first turn.
       result.usage ??= firstUsage;
@@ -188,6 +191,7 @@ export function buildDroidExecArgs(cwd, file, options = {}) {
   if (options.model) args.push("-m", options.model);
   if (options.effort) args.push("-r", options.effort);
   if (resume) args.push("--session-id", options.resumeThreadId);
+  if (options.systemPromptFile && !options.repair) args.push("--append-system-prompt-file", options.systemPromptFile);
   return args;
 }
 
@@ -203,7 +207,12 @@ function executeTurn(cwd, options) {
     const dir = createTempDir("droid-prompt-");
     const file = path.join(dir, "prompt.txt");
     fs.writeFileSync(file, options.prompt, { mode: 0o600 });
-    const args = buildDroidExecArgs(cwd, file, options);
+    let systemPromptFile;
+    if (options.systemPromptText !== undefined) {
+      systemPromptFile = path.join(dir, "system-prompt.txt");
+      fs.writeFileSync(systemPromptFile, options.systemPromptText, { mode: 0o600 });
+    }
+    const args = buildDroidExecArgs(cwd, file, { ...options, systemPromptFile });
     const streamJson = args[args.indexOf("--output-format") + 1] === "stream-json";
     const { command, prefix } = invocation(options.env ?? process.env);
     const child = spawn(command, [...prefix, ...args], { cwd, env: options.env ?? process.env, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"], windowsHide: true, shell: process.platform === "win32" });
