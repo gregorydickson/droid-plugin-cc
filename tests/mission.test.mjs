@@ -237,9 +237,12 @@ const live = { skip: process.env.DROID_SMOKE_MISSION !== "1", timeout: 600000 };
 const LIVE_GOAL = "Create hello.txt containing the word hi, then stop.";
 const LIVE_CANCEL_GOAL = "Do not create or edit any file yourself. Start exactly one worker for this mission. "
   + "The worker must first run the shell command `sleep 120`, then create hello.txt containing the word hi.";
-const SETTLE_MS = 540000;
-const CANCEL_FALLBACK_MS = 240000;
+const CLI_TIMEOUT_MS = 60000;
 const AFTER_CANCEL_MS = 10000;
+const SETTLE_MS = live.timeout - CLI_TIMEOUT_MS;
+// glm can plan for minutes before its first worker starts, so the wait for one spends the whole
+// test budget except one more status call, the cancel and the after-cancel check.
+const CANCEL_FALLBACK_MS = live.timeout - 2 * CLI_TIMEOUT_MS - AFTER_CANCEL_MS;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function liveMission(t) {
@@ -249,14 +252,14 @@ function liveMission(t) {
   assert.equal(run("git", ["remote"], { cwd }).stdout.trim(), "", "a live mission repo must have no remote");
   const env = { ...smokeEnv(), DROID_COMPANION_SESSION_ID: "mission-live" };
   const cli = (...args) => {
-    const result = run(process.execPath, [script, ...args, "--json"], { cwd, env, timeout: 60000 });
+    const result = run(process.execPath, [script, ...args, "--json"], { cwd, env, timeout: CLI_TIMEOUT_MS });
     assert.equal(result.status, 0, result.error?.message || result.stderr || result.stdout);
     return JSON.parse(result.stdout);
   };
   const start = goal => {
     const launched = cli("mission", "--background", "--model", SMOKE_MODEL, goal);
     assert.equal(launched.status, "queued");
-    t.after(() => run(process.execPath, [script, "cancel", launched.jobId, "--json"], { cwd, env, timeout: 60000 }));
+    t.after(() => run(process.execPath, [script, "cancel", launched.jobId, "--json"], { cwd, env, timeout: CLI_TIMEOUT_MS }));
     return launched.jobId;
   };
   return { cwd, cli, start };
