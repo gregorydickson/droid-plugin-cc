@@ -139,7 +139,11 @@ export async function runDroidTurn(cwd, options = {}) {
   return result;
 }
 
-export const READ_ONLY_TOOLS = Object.freeze(["Read", "LS", "Grep", "Glob", "Execute"]);
+export const WEB_TOOLS = Object.freeze(["WebSearch", "FetchUrl"]);
+export const SUBAGENT_TOOLS = Object.freeze(["Task", "TaskOutput", "TaskStop"]);
+export const RUN_COMMANDS_TOOLS = Object.freeze(["Read", "LS", "Grep", "Glob", "Execute"]);
+export const REPAIR_TOOLS = RUN_COMMANDS_TOOLS;
+export const READ_ONLY_TOOLS = Object.freeze([...RUN_COMMANDS_TOOLS, ...WEB_TOOLS, "Skill", "ToolSearch", "TodoWrite", ...SUBAGENT_TOOLS]);
 
 /** `server` or `server/tool` (percent-encoded segments), optionally written with droid's `MCP:` prefix. */
 export function normalizeMcpToolSelector(value) {
@@ -157,10 +161,14 @@ export function normalizeMcpToolSelector(value) {
  * exec and a continued turn (resume, answer, schema repair) streams stream-json;
  * neither passes --input-format, so the fence flags apply to both.
  *
- * Fences: read-only is droid's default autonomy over READ_ONLY_TOOLS;
- * run-commands is --auto medium over the same tools (commands run, no file
- * tools, but the shell can still write); workspace-write is --auto medium over
- * droid's default toolset. A schema-repair turn is always read-only.
+ * Fences: read-only is droid's default autonomy over READ_ONLY_TOOLS (the
+ * wide toolbox: web, skills, subagents) plus any MCP selectors; run-commands is
+ * --auto medium over RUN_COMMANDS_TOOLS plus MCP selectors (commands run, no
+ * file tools, but the shell can still write). Run-commands stays on the narrow
+ * five because the lane wrapper refuses any run-commands --only-tools member
+ * outside Read, LS, Grep, Glob and Execute. A schema-repair turn is default
+ * autonomy over REPAIR_TOOLS with no MCP selectors. Workspace-write is --auto
+ * medium over droid's default toolset.
  */
 export function buildDroidExecArgs(cwd, file, options = {}) {
   const resume = Boolean(options.resumeThreadId);
@@ -168,7 +176,7 @@ export function buildDroidExecArgs(cwd, file, options = {}) {
   const sandbox = options.repair ? "read-only" : options.sandbox;
   const mcpSelectors = options.repair ? [] : (options.mcpTools ?? []).map(selector => `MCP:${normalizeMcpToolSelector(selector)}`);
   if (sandbox === "workspace-write" || sandbox === "run-commands") args.push("--auto", "medium");
-  if (sandbox !== "workspace-write") args.push("--only-tools", [...READ_ONLY_TOOLS, ...mcpSelectors].join(","));
+  if (sandbox !== "workspace-write") args.push("--only-tools", [...(options.repair ? REPAIR_TOOLS : sandbox === "run-commands" ? RUN_COMMANDS_TOOLS : READ_ONLY_TOOLS), ...mcpSelectors].join(","));
   else if (mcpSelectors.length) args.push("--add-tools", mcpSelectors.join(","));
   if (options.model) args.push("-m", options.model);
   if (options.effort) args.push("-r", options.effort);

@@ -6,54 +6,78 @@ import { fileURLToPath } from "node:url";
 
 import { buildEnv, installFakeDroid } from "./fake-droid-fixture.mjs";
 import { initGitRepo, makeTempDir, run } from "./helpers.mjs";
-import { buildDroidExecArgs, normalizeMcpToolSelector, READ_ONLY_TOOLS } from "../plugins/droid/scripts/lib/droid.mjs";
+import { buildDroidExecArgs, normalizeMcpToolSelector, READ_ONLY_TOOLS, RUN_COMMANDS_TOOLS, REPAIR_TOOLS, WEB_TOOLS, SUBAGENT_TOOLS } from "../plugins/droid/scripts/lib/droid.mjs";
 
 const SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "plugins", "droid", "scripts", "droid-companion.mjs");
 const FILE_EDITING_TOOLS = ["Edit", "Create", "ApplyPatch", "MultiEdit", "Write"];
 
 const flag = (args, name) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
 const toolList = (args, name) => flag(args, name)?.split(",");
+const toolSet = (args, name) => new Set(toolList(args, name));
+// droid-lock.sh refuses a run-commands --only-tools member outside these five (plus MCP selectors).
+const LANE_SAFE_TOOLS = new Set(["Read", "LS", "Grep", "Glob", "Execute"]);
 
-test("run-commands builds medium autonomy over the read-only toolset on fresh and resumed turns", () => {
+test("the sandbox tool lists are frozen and split by what a lane may run", () => {
+  for (const list of [READ_ONLY_TOOLS, WEB_TOOLS, SUBAGENT_TOOLS, RUN_COMMANDS_TOOLS, REPAIR_TOOLS]) assert.ok(Object.isFrozen(list));
+  assert.deepEqual(new Set(RUN_COMMANDS_TOOLS), LANE_SAFE_TOOLS);
+  assert.deepEqual(new Set(REPAIR_TOOLS), LANE_SAFE_TOOLS);
+  assert.deepEqual(new Set(WEB_TOOLS), new Set(["WebSearch", "FetchUrl"]));
+  assert.deepEqual(new Set(SUBAGENT_TOOLS), new Set(["Task", "TaskOutput", "TaskStop"]));
+  assert.deepEqual(new Set(READ_ONLY_TOOLS), new Set([...LANE_SAFE_TOOLS, "WebSearch", "FetchUrl", "Skill", "ToolSearch", "TodoWrite", "Task", "TaskOutput", "TaskStop"]));
+  for (const tool of [...WEB_TOOLS, ...SUBAGENT_TOOLS]) assert.ok(!RUN_COMMANDS_TOOLS.includes(tool), tool);
+  for (const tool of FILE_EDITING_TOOLS) assert.ok(!READ_ONLY_TOOLS.includes(tool), tool);
+});
+
+const MCP = ["github", "slack/search_messages"];
+const MCP_SELECTORS = MCP.map(selector => `MCP:${selector}`);
+
+for (const [consumer, options] of [
+  ["review / adversarial-review", { sandbox: "read-only" }],
+  ["read-only task", { sandbox: "read-only" }],
+  ["resumed read-only task", { sandbox: "read-only", resumeThreadId: "session-1" }],
+]) {
+  test(`${consumer} gets READ_ONLY_TOOLS plus its MCP selectors and no autonomy flag`, () => {
+    for (const mcpTools of [undefined, MCP]) {
+      const args = buildDroidExecArgs("/repo", "/p.txt", { ...options, mcpTools });
+      assert.deepEqual(toolSet(args, "--only-tools"), new Set([...READ_ONLY_TOOLS, ...(mcpTools ? MCP_SELECTORS : [])]));
+      assert.ok(!args.includes("--auto"));
+      assert.equal(flag(args, "--add-tools"), undefined);
+      assert.equal(flag(args, "--output-format"), options.resumeThreadId ? "stream-json" : "stream-jsonrpc");
+      assert.ok(!args.includes("--input-format"), "flags configure only a one-shot exec; an --input-format JSON-RPC session would ignore them");
+    }
+  });
+}
+
+test("run-commands gets only the lane-safe tools plus MCP selectors under medium autonomy, fresh and resumed", () => {
   for (const resumeThreadId of [undefined, "session-1"]) {
-    const args = buildDroidExecArgs("/repo", "/p.txt", { sandbox: "run-commands", resumeThreadId });
-    assert.equal(flag(args, "--auto"), "medium", String(resumeThreadId));
-    assert.deepEqual(toolList(args, "--only-tools"), READ_ONLY_TOOLS);
-    assert.equal(flag(args, "--output-format"), resumeThreadId ? "stream-json" : "stream-jsonrpc");
-    // Flags configure only a one-shot exec; an --input-format JSON-RPC session would ignore them.
-    assert.ok(!args.includes("--input-format"));
-    for (const tool of FILE_EDITING_TOOLS) assert.ok(!toolList(args, "--only-tools").includes(tool), tool);
+    for (const mcpTools of [undefined, MCP]) {
+      const args = buildDroidExecArgs("/repo", "/p.txt", { sandbox: "run-commands", resumeThreadId, mcpTools });
+      assert.equal(flag(args, "--auto"), "medium", String(resumeThreadId));
+      assert.deepEqual(toolSet(args, "--only-tools"), new Set([...RUN_COMMANDS_TOOLS, ...(mcpTools ? MCP_SELECTORS : [])]));
+      for (const tool of toolList(args, "--only-tools")) assert.ok(LANE_SAFE_TOOLS.has(tool) || tool.startsWith("MCP:"), tool);
+      assert.equal(flag(args, "--output-format"), resumeThreadId ? "stream-json" : "stream-jsonrpc");
+      assert.ok(!args.includes("--input-format"));
+    }
   }
 });
 
-test("read-only keeps no autonomy, write keeps medium with no tool list, and a repair turn is always read-only", () => {
-  const readOnly = buildDroidExecArgs("/repo", "/p.txt", { sandbox: "read-only" });
-  assert.equal(flag(readOnly, "--auto"), undefined);
-  assert.deepEqual(toolList(readOnly, "--only-tools"), READ_ONLY_TOOLS);
-
-  const write = buildDroidExecArgs("/repo", "/p.txt", { sandbox: "workspace-write" });
-  assert.equal(flag(write, "--auto"), "medium");
-  assert.equal(flag(write, "--only-tools"), undefined);
-
-  for (const sandbox of ["run-commands", "workspace-write"]) {
+test("a repair turn gets REPAIR_TOOLS, no MCP selectors and no autonomy flag whatever the job's sandbox", () => {
+  for (const sandbox of ["read-only", "run-commands", "workspace-write"]) {
     const repair = buildDroidExecArgs("/repo", "/p.txt", { sandbox, repair: true, resumeThreadId: "s", mcpTools: ["github"] });
-    assert.equal(flag(repair, "--auto"), undefined, sandbox);
-    assert.deepEqual(toolList(repair, "--only-tools"), READ_ONLY_TOOLS, sandbox);
+    assert.ok(!repair.includes("--auto"), sandbox);
+    assert.deepEqual(toolSet(repair, "--only-tools"), new Set(REPAIR_TOOLS), sandbox);
     assert.equal(flag(repair, "--add-tools"), undefined, sandbox);
   }
 });
 
-test("MCP selectors join the read-only tool list, or are added to a write job's default toolset", () => {
-  const mcpTools = ["github", "slack/search_messages"];
-  const selectors = mcpTools.map(selector => `MCP:${selector}`);
-  for (const sandbox of ["read-only", "run-commands"]) {
-    const args = buildDroidExecArgs("/repo", "/p.txt", { sandbox, mcpTools });
-    assert.deepEqual(toolList(args, "--only-tools"), [...READ_ONLY_TOOLS, ...selectors], sandbox);
-    assert.equal(flag(args, "--add-tools"), undefined, sandbox);
-  }
-  const write = buildDroidExecArgs("/repo", "/p.txt", { sandbox: "workspace-write", mcpTools });
-  assert.deepEqual(toolList(write, "--add-tools"), selectors);
+test("workspace-write keeps medium autonomy with no tool list, and MCP selectors are added to its default toolset", () => {
+  const write = buildDroidExecArgs("/repo", "/p.txt", { sandbox: "workspace-write" });
+  assert.equal(flag(write, "--auto"), "medium");
   assert.equal(flag(write, "--only-tools"), undefined);
+
+  const withMcp = buildDroidExecArgs("/repo", "/p.txt", { sandbox: "workspace-write", mcpTools: MCP });
+  assert.deepEqual(toolList(withMcp, "--add-tools"), MCP_SELECTORS);
+  assert.equal(flag(withMcp, "--only-tools"), undefined);
 
   const none = buildDroidExecArgs("/repo", "/p.txt", { sandbox: "read-only" });
   assert.ok(!flag(none, "--only-tools").includes("MCP:"), "no MCP tools by default");
@@ -101,7 +125,7 @@ test("task, review and adversarial-review pass --run-commands and --mcp-tool thr
     assert.equal(result.status, 0, result.stderr);
     const args = ctx.execArgs()[0];
     assert.equal(flag(args, "--auto"), "medium", command[0]);
-    assert.deepEqual(toolList(args, "--only-tools"), [...READ_ONLY_TOOLS, "MCP:github", "MCP:slack/search"], command[0]);
+    assert.deepEqual(toolSet(args, "--only-tools"), new Set([...RUN_COMMANDS_TOOLS, "MCP:github", "MCP:slack/search"]), command[0]);
   }
 });
 
@@ -116,7 +140,7 @@ test("--run-commands and --mcp-tool carry over to a resumed task turn", () => {
   assert.ok(second.includes("--session-id"));
   for (const args of [first, second]) {
     assert.equal(flag(args, "--auto"), "medium");
-    assert.deepEqual(toolList(args, "--only-tools"), [...READ_ONLY_TOOLS, "MCP:github"]);
+    assert.deepEqual(toolSet(args, "--only-tools"), new Set([...RUN_COMMANDS_TOOLS, "MCP:github"]));
   }
 });
 

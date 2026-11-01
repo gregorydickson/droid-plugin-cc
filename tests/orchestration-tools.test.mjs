@@ -4,6 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { makeTempDir, initGitRepo, run } from "./helpers.mjs";
+import { READ_ONLY_TOOLS } from "../plugins/droid/scripts/lib/droid.mjs";
 import { buildEnv } from "./fake-droid-fixture.mjs";
 import { installWorkerDroid } from "./worker-droid-fixture.mjs";
 
@@ -87,7 +88,7 @@ for (const behavior of ["review-ok", "invalid-claim-verdict"]) {
     const result = command("verify-claims", "claims.json");
     const request = JSON.parse(fs.readFileSync(path.join(bin, "fake-droid-state.json"))).turns[0];
     const args = JSON.parse(fs.readFileSync(path.join(bin, "fake-droid-state.json"))).threadRequests[0].args;
-    assert.equal(args[args.indexOf("--only-tools") + 1], "Read,LS,Grep,Glob,Execute");
+    assert.deepEqual(new Set(args[args.indexOf("--only-tools") + 1].split(",")), new Set(READ_ONLY_TOOLS));
     assert.ok(!args.includes("--auto"));
     assert.match(request.prompt, new RegExp(`only against commit ${sha}`));
     assert.deepEqual(JSON.parse(request.prompt.slice(request.prompt.indexOf('\n{"claim"') + 1).split("\n\nReturn only JSON")[0]), { claim, source: "pinned evidence\n" });

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runDroidTurn, buildPauseOutputSchema } from "../plugins/droid/scripts/lib/droid.mjs";
+import { runDroidTurn, buildPauseOutputSchema, READ_ONLY_TOOLS, REPAIR_TOOLS } from "../plugins/droid/scripts/lib/droid.mjs";
 import { resolveRuntimeOptions } from "../plugins/droid/scripts/lib/runtime-options.mjs";
 import { makeTempDir } from "./helpers.mjs";
 import { installWorkerDroid } from "./worker-droid-fixture.mjs";
@@ -24,7 +24,7 @@ test("Droid streams progress, returns usage, maps controls, and resumes its sess
   assert.ok(progress.some(event => event.threadId === first.threadId));
   const initialArgs = state().threadRequests[0].args;
   assert.ok(!initialArgs.includes("--auto"));
-  assert.equal(initialArgs[initialArgs.indexOf("--only-tools") + 1], "Read,LS,Grep,Glob,Execute");
+  assert.deepEqual(new Set(initialArgs[initialArgs.indexOf("--only-tools") + 1].split(",")), new Set(READ_ONLY_TOOLS));
   assert.equal(initialArgs[initialArgs.indexOf("-m") + 1], "factory-model");
   assert.equal(initialArgs[initialArgs.indexOf("-r") + 1], "max");
   const resumed = await runDroidTurn(makeTempDir(), { prompt: "Continue", resumeThreadId: first.threadId, sandbox: "workspace-write" });
@@ -42,7 +42,7 @@ test("schema repair takes the repair turn's session-inclusive usage, not a sum",
   const requests = state().threadRequests;
   assert.deepEqual(requests.map(r => r.threadId), [result.threadId, result.threadId]);
   assert.ok(!requests[1].args.includes("--auto"));
-  assert.equal(requests[1].args[requests[1].args.indexOf("--only-tools") + 1], "Read,LS,Grep,Glob,Execute");
+  assert.deepEqual(new Set(requests[1].args[requests[1].args.indexOf("--only-tools") + 1].split(",")), new Set(REPAIR_TOOLS));
 });
 test("invalid output after one repair retains raw text and fails", async t => {
   const state = fixture(t, "invalid-json");
