@@ -53,6 +53,7 @@ import {
 import {
   buildSingleJobSnapshot,
   buildStatusSnapshot,
+  findJobs,
   readStoredJob,
   publicJob,
   resolveCancelableJob,
@@ -1203,6 +1204,8 @@ function selectedSession(cwd, reference) {
   return readStoredJob(job.workspaceRoot, job.id) ?? job;
 }
 
+const sessionLine = job => `${job.name ?? job.id} ${job.status} ${job.threadId ?? ""}\n`;
+
 async function handleSessions(argv) {
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["cwd", "prompt-file", "model", "effort", ...WORKER_VALUE_OPTIONS],
@@ -1212,10 +1215,17 @@ async function handleSessions(argv) {
   });
   const cwd = resolveCommandCwd(options);
   const [action = "list", reference, ...words] = positionals;
+  if (action === "find") {
+    const text = [reference, ...words].filter(Boolean).join(" ");
+    if (!text) throw new Error("Provide text to find.");
+    const found = findJobs(cwd, text);
+    outputCommandResult(found.map(publicJob), found.map(sessionLine).join(""), options.json);
+    return;
+  }
   for (const root of new Set(listJobsAcrossWorktrees(cwd).map(job => job.workspaceRoot))) await reconcileOrphanedJobs(root);
   if (action === "list") {
     const sessions = listJobsAcrossWorktrees(cwd).filter(job => !job.resumedTo && (job.name || job.persistent));
-    outputCommandResult(sessions.map(publicJob), sessions.map(job => `${job.name ?? job.id} ${job.status} ${job.threadId ?? ""}\n`).join(""), options.json);
+    outputCommandResult(sessions.map(publicJob), sessions.map(sessionLine).join(""), options.json);
     return;
   }
   if (!reference) throw new Error("Provide a session name or job id.");
@@ -1226,7 +1236,7 @@ async function handleSessions(argv) {
     }
     return handleCancel([job.id, "--cwd", job.workspaceRoot, ...(options.json ? ["--json"] : [])]);
   }
-  if (action !== "resume") throw new Error("Use sessions list, stop, or resume.");
+  if (action !== "resume") throw new Error("Use sessions list, find, stop, or resume.");
   const prompt = readTaskPrompt(cwd, options, words) || DEFAULT_CONTINUE_PROMPT;
   return resumeSession(job, prompt, { ...options, overrideCwd: cwd, structured: true });
 }

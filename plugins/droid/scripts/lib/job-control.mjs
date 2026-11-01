@@ -13,6 +13,13 @@ export function sortJobsNewestFirst(jobs) {
   return [...jobs].sort((left, right) => String(right.updatedAt ?? "").localeCompare(String(left.updatedAt ?? "")));
 }
 
+export function findJobs(cwd, text) {
+  const needle = String(text).toLowerCase();
+  const matches = (job) => [job.id, job.name, job.title, job.jobTitle, job.threadId]
+    .some((value) => typeof value === "string" && value.toLowerCase().includes(needle));
+  return sortJobsNewestFirst(listJobsAcrossWorktrees(cwd).filter(matches));
+}
+
 function getCurrentSessionId(options = {}) {
   return options.env?.[SESSION_ID_ENV] ?? process.env[SESSION_ID_ENV] ?? null;
 }
