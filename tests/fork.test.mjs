@@ -86,6 +86,17 @@ test("forking a completed job creates a new linked job and leaves the parent byt
   assert.ok(!args.includes("--session-id"), args.join(" "));
 });
 
+test("forking a resumed turn, whose request continues a session, never carries --session-id", () => {
+  const ctx = setup();
+  ctx.cli("task", "--name", "origin", "Start");
+  const resumed = ctx.cli("sessions", "resume", "origin", "Next");
+  assert.ok(ctx.stored(resumed.jobId).request.resumeThreadId);
+  ctx.cli("task", "--fork", resumed.jobId, "Explore");
+  const args = ctx.requests().at(-1).args;
+  assert.equal(flagValue(args, "--fork"), ctx.stored(resumed.jobId).threadId);
+  assert.ok(!args.includes("--session-id"), args.join(" "));
+});
+
 test("a fork replays the parent's worker options but not its brief", () => {
   const ctx = setup();
   const brief = path.join(ctx.root, "brief.md");
