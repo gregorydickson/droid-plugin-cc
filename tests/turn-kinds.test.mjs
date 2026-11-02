@@ -127,5 +127,5 @@ test("a repair turn built with every per-kind option except steerable carries no
   const { steerable, ...rest } = PER_KIND_OPTIONS;
   const args = buildDroidExecArgs("/repo", "/p.txt", { ...REPAIR_BASE, ...rest, repair: true });
   for (const flag of PER_KIND_FLAGS) assert.ok(!args.includes(flag), flag);
-  assert.ok(args.includes("--tag"));
+  assert.deepEqual(JSON.parse(flagValue(args, "--tag")), { name: "droid-plugin-cc", metadata: REPAIR_BASE.tag });
 });
