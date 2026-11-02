@@ -1414,6 +1414,8 @@ async function resumeSession(previous, prompt, options = {}) {
     deliveryErrors: null, unlockError: null, usage: null, sessionUsage: null, startedAt: null, cancelledAt: null, cancelRequested: false,
     // The steering socket belongs to the turn that opened it; an answer is the same job, so it keeps that job's warning.
     socketPath: null, steeringWarning: options.answering ? previous.steeringWarning ?? null : null,
+    // Finalization writes a violation only when this turn changed files, so the copied one would otherwise stand.
+    readOnlyViolation: null,
     structured: options.structured || options.answering || Boolean(resumed.worker.structured ?? previous.structured) };
   const request = { ...resumed.request, resumeLast: false, resumeThreadId: previous.threadId, prompt, jobId: job.id };
   job.request = request;

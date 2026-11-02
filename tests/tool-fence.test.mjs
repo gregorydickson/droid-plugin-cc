@@ -166,6 +166,20 @@ test("a --run-commands job that changes files is flagged as a read-only violatio
   assert.match(foreground.stdout, /Read-only violation[^\n]*droid-wrote\.txt/);
 });
 
+test("a resumed --run-commands turn that leaves files alone does not inherit the violation of the turn before it", () => {
+  const ctx = repo("writes-file");
+  const first = backgroundResult(ctx, "task", "--run-commands", "run the tests");
+  assert.deepEqual(first.payload.readOnlyViolation, { changedFiles: ["droid-wrote.txt"] });
+  installFakeDroid(ctx.binDir, "review-ok");
+  const resumed = backgroundResult(ctx, "task", "--resume-last", "run them again");
+  const args = ctx.execArgs().at(-1);
+  assert.ok(args.includes("--session-id") && flag(args, "--auto") === "medium", `the resumed turn replays --run-commands: ${args.join(" ")}`);
+  assert.notEqual(resumed.jobId, first.jobId);
+  assert.deepEqual(resumed.payload.changedFiles ?? [], []);
+  assert.equal(resumed.payload.readOnlyViolation, undefined);
+  assert.doesNotMatch(resumed.text, /Read-only violation/);
+});
+
 test("no violation is flagged when a --run-commands job leaves files alone, or for other job modes", () => {
   for (const [behavior, args] of [["review-ok", ["task", "--run-commands", "run the tests"]], ["writes-file", ["task", "--write", "edit things"]], ["writes-file", ["task", "look around"]]]) {
     const ctx = repo(behavior);
