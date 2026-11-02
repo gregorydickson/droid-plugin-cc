@@ -8,8 +8,9 @@ The companion accepts these task options:
 - `--brief FILE`, repeated `--instructions FILE`, repeated `--preread FILE`.
 - `--name NAME`, `--persistent`, `--pause-and-ask`.
 - `--worktree PATH`, `--lock-cmd COMMAND`, `--unlock-cmd COMMAND`.
+- `--fork JOB|NAME` branches a new linked job from an existing job or named session; `--steerable` (with `--background`) keeps the session open so `send JOB MESSAGE` can add turns.
 - `--on-start`, `--on-progress`, `--on-stop-report`, `--on-end`, `--on-fail` commands.
-- `--write` or `--run-commands`, repeated `--mcp-tool SERVER[/TOOL]`, `--model ID`, `--effort LEVEL`, `--background`, `--json`. Without `--model`/`--effort`, `DROID_DEFAULT_MODEL`/`DROID_DEFAULT_EFFORT` apply.
+- `--write` or `--run-commands`, repeated `--mcp-tool SERVER[/TOOL]`, `--no-web`, `--no-subagents` (drop those tool groups from a read-only job), `--model ID`, `--effort LEVEL`, `--background`, `--json`. Without `--model`/`--effort`, `DROID_DEFAULT_MODEL`/`DROID_DEFAULT_EFFORT` apply.
 
 Shell lifecycle commands are caller code and require caller authorization. Runtime events include job IDs and stable delivery IDs for idempotent recovery. Job files retain private configuration; public status/results omit executable hook contents.
 
@@ -21,6 +22,6 @@ With `--pause-and-ask`, a structured stop report contains `state: "awaiting-answ
 
 Output-schema enforcement is local Ajv validation with one read-only repair turn. Invalid results include raw output and validation diagnostics. The envelope exposes `jobId`, `status`, `schemaValid`, `result`, `usage`, `changedFiles`, and `inputs`, plus session and delivery metadata.
 
-`--profile`, `--mcp-config`, and `--fanout` are rejected: this adapter cannot preserve their earlier enforcement contracts. Configure Droid separately. Use multiple independent worker jobs when parallel results are needed. Live `send` steering is unsupported; cancel or resume with another prompt. Native transcript import is unsupported; supply a summary or context files.
+`--profile`, `--mcp-config`, and `--fanout` are rejected: this adapter cannot preserve their earlier enforcement contracts. Configure Droid separately. Use multiple independent worker jobs when parallel results are needed. `send` steers only a `task --background --steerable` job; for any other job, cancel or resume with another prompt. Native transcript import is unsupported; supply a summary or context files.
 
 Each job owns its own Droid child process group. Cancelling it terminates that group; no broker is needed. SessionEnd cleans up unnamed, nonpersistent jobs for that Claude session, while the watchdog recovers crashed workers and publishes durable failure results.
