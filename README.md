@@ -13,7 +13,7 @@ claude plugin marketplace add /absolute/path/to/droid-plugin-cc
 claude plugin install droid@droid-fork
 ```
 
-The marketplace manifest names this checkout `droid-fork`. Run `/droid:setup` after installation. Setup checks CLI availability and runs `droid doctor` to report login and host health.
+The marketplace manifest names this checkout `droid-fork`. Run `/droid:setup` after installation. Setup checks CLI availability and runs `droid doctor` to report login and host health. `droid doctor` is cut off after 15 seconds; set `DROID_DOCTOR_TIMEOUT_MS` to change that.
 
 ## Commands
 
@@ -35,7 +35,7 @@ The marketplace manifest names this checkout `droid-fork`. Run `/droid:setup` af
 | `/droid:setup --disable-review-gate` | Disable the gate |
 | `/droid:transfer` | Explain transcript-import limits and the summary-based alternative |
 
-Rescue supports `--background`, `--wait`, `--fresh`, `--model ID`, and `--effort LEVEL`, plus `--fork JOB|NAME` (branch a new linked job from an existing job or named session), `--spec` with `--spec-model` and `--spec-effort` (Droid spec mode), `--steerable` (background only; keep the session open for `send`), and `--no-web` / `--no-subagents` (drop those tool groups from a read-only job). `--model` accepts Droid's latest-model aliases and version wildcards, and `/droid:setup` runs `droid doctor` and reports login and host health. Both review commands are read-only by default and accept `--run-commands` to run tests while reviewing. Rescue and both reviews accept `--mcp-tool SERVER[/TOOL]` (repeatable). The plugin supplies the git diff; Droid can read repository files for context. Large diffs are passed in a prompt file, subject to the CLI's context limit.
+Rescue supports `--background`, `--wait`, `--fresh`, `--model ID`, and `--effort LEVEL`, plus `--fork JOB|NAME` (branch a new linked job from an existing job or named session), `--spec` with `--spec-model` and `--spec-effort` (Droid spec mode), `--steerable` (background only; keep the session open for `send`, until `send --end`, a cancel, or `DROID_STEER_IDLE_MS` milliseconds without a message, default 120000), and `--no-web` / `--no-subagents` (drop those tool groups from a read-only job). `--model` accepts Droid's latest-model aliases and version wildcards, and `/droid:setup` runs `droid doctor` and reports login and host health. Both review commands are read-only by default and accept `--run-commands` to run tests while reviewing. Rescue and both reviews accept `--mcp-tool SERVER[/TOOL]` (repeatable). The plugin supplies the git diff; Droid can read repository files for context. Large diffs are passed in a prompt file, subject to the CLI's context limit.
 
 ## Permissions and execution
 
