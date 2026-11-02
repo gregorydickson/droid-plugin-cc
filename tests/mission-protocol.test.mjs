@@ -7,6 +7,7 @@ import { createInterface } from "node:readline";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { makeTempDir, initGitRepo, run, SMOKE_MODEL } from "./helpers.mjs";
+import { isDroidBinary, withDescendants, missionProcesses } from "./mission-ownership.mjs";
 
 // Live probe of `droid exec --mission`; docs/missions.md records what it found.
 // Missions spend credits, so each scenario runs once. DROID_MISSION_REPORT=<dir>
@@ -47,26 +48,6 @@ function snapshot() {
     const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/);
     return match ? [{ pid: Number(match[1]), ppid: Number(match[2]), pgid: Number(match[3]), command: match[4] }] : [];
   });
-}
-
-const isDroidBinary = proc => /(^|\/)(droid|factoryd)$/.test(proc.command.split(" ")[0]);
-
-// The pids in `seeds` plus every process descended from them.
-function withDescendants(procs, seeds) {
-  const tree = new Set(seeds);
-  for (let grew = true; grew;) {
-    grew = false;
-    for (const proc of procs) if (!tree.has(proc.pid) && tree.has(proc.ppid)) { tree.add(proc.pid); grew = true; }
-  }
-  return tree;
-}
-
-// Processes the mission owns: the exec's descendants, any process naming the
-// mission session id, and any Droid or factoryd binary started after the baseline.
-function missionProcesses(procs, rootPid, baseline, sessionId) {
-  const tree = withDescendants(procs, [rootPid]);
-  return procs.filter(proc => tree.has(proc.pid) || !baseline.has(proc.pid) && (
-    (sessionId && proc.command.includes(sessionId)) || isDroidBinary(proc)));
 }
 
 // Worker processes: a Droid or factoryd binary other than the exec itself, or a
@@ -114,7 +95,7 @@ function runMission(format, { goal = GOAL, cancel = false } = {}) {
   const lineage = new Map();
   let exited = false, cancelled = false;
   const sample = () => {
-    for (const proc of missionProcesses(snapshot(), child.pid, baseline, record.sessionId)) {
+    for (const proc of missionProcesses(snapshot(), { rootPid: child.pid, baseline, sessionId: record.sessionId, cwd })) {
       const seen = lineage.get(proc.pid) ?? { ...proc, inExecGroup: proc.pgid === child.pid, firstSeenMs: Date.now() - started };
       seen.hasSessionId ||= Boolean(record.sessionId && proc.command.includes(record.sessionId));
       lineage.set(proc.pid, seen);
