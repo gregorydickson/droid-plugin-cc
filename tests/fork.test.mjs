@@ -229,6 +229,19 @@ test("a fork takes a name only from its own --name, and that name must be free",
   assert.equal(JSON.parse(clash.stdout).message, 'Session "origin" already exists. Use sessions resume.');
 });
 
+test("a fork launched from another worktree is recorded in the parent's workspace", () => {
+  const ctx = setup();
+  const linked = fs.realpathSync(makeTempDir("droid-fork-linked-"));
+  assert.equal(run("git", ["worktree", "add", "-b", "side", linked], { cwd: ctx.root }).status, 0);
+  const inLinked = run(process.execPath, [script, "task", "--name", "sibling-parent", "--json", "Start"], { cwd: linked, env: ctx.env });
+  assert.equal(inLinked.status, 0, inLinked.stderr + inLinked.stdout);
+  const parent = JSON.parse(inLinked.stdout);
+  const fork = ctx.cli("task", "--fork", "sibling-parent", "Explore");
+  const linkedJob = listJobs(linked).find(job => job.id === fork.jobId);
+  assert.deepEqual(linkedJob?.forkedFrom, { jobId: parent.jobId, threadId: listJobs(linked).find(job => job.id === parent.jobId).threadId });
+  assert.ok(!listJobs(ctx.root).some(job => job.id === fork.jobId), "the fork must not land in the launching worktree");
+});
+
 test("a background fork runs to completion as its own job", () => {
   const ctx = setup();
   const parent = ctx.cli("task", "--name", "origin", "Start");
