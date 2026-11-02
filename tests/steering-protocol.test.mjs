@@ -25,7 +25,7 @@ const live = { skip: process.env.DROID_SMOKE !== "1", timeout: LIVE_TIMEOUT_MS }
 
 const note = message => message.params?.notification;
 const isResponse = (message, id) => message.id === id && ("result" in message || "error" in message);
-const confirmationOf = (outputs, id) => outputs.find(m => note(m)?.type === "settings_updated" && note(m).requestId === id);
+const isConfirmation = (message, id) => note(message)?.type === "settings_updated" && note(message).requestId === id;
 const turnEnded = message => note(message)?.type === "agent_turn_completed";
 
 function settableRows(doc) {
@@ -58,7 +58,7 @@ function verifySettingRequests(requests, outputs) {
       confirmed.add(method);
       continue;
     }
-    const settings = method === "droid.initialize_session" ? response.result.settings : note(confirmationOf(outputs, id) ?? {})?.settings;
+    const settings = method === "droid.initialize_session" ? response.result.settings : outputs.find(m => isConfirmation(m, id))?.params.notification.settings;
     assert.ok(settings, `${method} ${JSON.stringify(params)} was confirmed by a settings_updated carrying its requestId`);
     for (const key of Object.values(FENCE_KEYS)) {
       if (!(key in params)) continue;
@@ -169,7 +169,7 @@ test("live: real Droid confirms every captured setting request and the read-only
     for (const { method, params } of transcriptRequests.filter(request => SETTING_METHODS.has(request.method))) {
       const replayed = JSON.parse(JSON.stringify(params).replaceAll("$CWD", cwd));
       const { id, mark } = await session.request(method, replayed);
-      if (method === "droid.update_session_settings") await session.waitFor(m => note(m)?.requestId === id && note(m).type === "settings_updated", mark, 30000, `${method} confirmation`);
+      if (method === "droid.update_session_settings") await session.waitFor(m => isConfirmation(m, id), mark, 30000, `${method} confirmation`);
       sent.push({ id, method, params: replayed });
     }
     const replay = verifySettingRequests(sent, session.outputs);
