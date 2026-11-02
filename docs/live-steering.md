@@ -1,6 +1,6 @@
 # Live steering (`send`): input protocol
 
-Status: the protocol is captured; the transport is not built yet. `send <job> <message>` still reports that live steering is unavailable. This note records how `droid exec --input-format stream-jsonrpc` is driven, what can be set over it, and the go/no-go decision for building `send` on it.
+Status: built. `task --steerable --background` runs a job on a held-open input session and `send <job> <message>` adds a user turn to it; the design is under "Design" below. This note also records how `droid exec --input-format stream-jsonrpc` is driven, what can be set over it, and the go/no-go decision the design was built on.
 
 Captured against droid 1.1.0 on glm-5.3. The transcript is `tests/fixtures/droid-input-session-1.1.0.ndjson` (paths and account identifiers scrubbed; `$CWD` stands for the session's repo). `tests/steering-protocol.test.mjs` checks the table and the decision against that transcript, and with `DROID_SMOKE=1` replays the setting requests against real Droid.
 
@@ -67,6 +67,22 @@ Other methods in the CLI bundle include `droid.close_session`, `droid.resolve_qu
 - **A message sent after completion** starts a new turn, with that message's id as `turnId`.
 - **Interrupt.** `droid.interrupt_session` during a turn ends it with `agent_turn_completed` `reason: "cancelled"`. The interrupt's response arrives after that notification. The next `add_user_message` runs a normal turn.
 - **End of session.** Closing stdin ends the process with exit code 0, about a second later.
+
+## Design
+
+**Starting a steered job.** `task --steerable` keeps a job's Droid session open so it can be sent more messages. It needs `--background` (the session outlives the command that started it) and droid 1.1.0 or newer, and is offered for every sandbox: read-only, `--run-commands` and `--write`. It is opt-in; `mission` refuses `--steerable`, and the stop-time review gate never uses it. A resumed, forked or answered turn cannot reopen a session over the input protocol, so it runs as an ordinary one-shot turn.
+
+**The child.** The background worker starts one `droid exec --input-format stream-jsonrpc --output-format stream-jsonrpc --cwd <repo>` and sends `droid.initialize_session` with the model, effort, autonomy and tool list a one-shot turn of the same sandbox would pass as flags: read-only is autonomy `off` over the read-only tools, `--run-commands` is autonomy `medium` over `Read`, `LS`, `Grep`, `Glob` and `Execute`, and `--write` is autonomy `medium` over droid's default toolset. The worker compares what it asked for with the `settings` droid echoes. A model or effort droid did not apply fails the job before any user turn. An autonomy or tool list droid did not apply lets the job run with the session's value and records a `steeringWarning` on the job naming what was ignored.
+
+**The socket.** Once the session is ready, the worker listens on a unix socket and records its path as `socketPath` on the job. The path is `<jobs dir>/<jobId>.sock`, or `droid-<hash>.sock` in the temp dir when that would not fit in a socket path. Each line written to it is `{"text": "…"}` (the next user turn) or `{"end": true}`, and each is answered by one line, `{"ok": true}` or `{"ok": false, "error": "…"}`. The socket goes away when the job ends.
+
+**Turns.** Each message becomes its own user turn. A message sent while a turn is running waits until that turn completes; droid would otherwise fold it into the running turn (see "Turns" above). The job's result is the last turn's answer, with the session's total token usage. A job with an output schema checks the last answer against it and repairs it once.
+
+**Ending.** The session ends, and the job finishes, when a turn completes and nothing arrives for `DROID_STEER_IDLE_MS` milliseconds (default 120000), when `send <job> --end` is received (queued turns still run first), or when the job is cancelled. Cancel kills the droid child and its descendants and removes the socket.
+
+**`send`.** `send <job|name> <message>` (or `--file <path>`, or `--end`) writes one line to the job's socket and prints `sent to <jobId>` once the worker accepts it. It exits 1 with the reason, writing nothing to droid, when the job is unknown, not running, awaiting an answer (use `answer`), not started with `--steerable`, or its socket is gone, and when the message is empty. If the job carries a `steeringWarning`, `send` repeats it on stderr and in `--json` output.
+
+**Proof.** `tests/steering.test.mjs` covers the design against a fake droid. With `DROID_SMOKE=1` it also runs real droid on glm-5.3: a token sent to a steered job comes back as the job's result; a steered `--run-commands` job and a steered read-only job each refuse a request to `Create` a file, and leave none, while a steered `--write` job given the same request creates it; and the job records carry no `steeringWarning` for a fence this decision marks settable, or one naming each fence it marks not settable.
 
 ## Decision
 

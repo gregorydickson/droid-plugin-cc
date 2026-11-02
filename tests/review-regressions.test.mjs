@@ -85,7 +85,7 @@ test("transport and documentation retain platform, temp-file and permission cont
   assert.doesNotMatch(source, /mkdtempSync|process\.kill/);
   assert.doesNotMatch(source, /options\.fanout/);
   const companion = fs.readFileSync(script, "utf8");
-  assert.doesNotMatch(companion, /startWorkerControl|sendWorkerMessage|fanout < 1/);
+  assert.doesNotMatch(companion, /startWorkerControl|fanout < 1/);
   const rescue = fs.readFileSync(path.resolve("plugins/droid/agents/droid-rescue.md"), "utf8");
   assert.match(rescue, /not a filesystem sandbox/);
   assert.match(rescue, /forwarded prompt and check changedFiles/);

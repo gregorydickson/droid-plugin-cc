@@ -1,6 +1,6 @@
 ---
 description: Delegate investigation, an explicit fix request, or follow-up rescue work to the Droid rescue subagent
-argument-hint: "[--background|--wait] [--resume|--fresh] [--write|--run-commands] [--mcp-tool <server[/tool]>] [--no-web] [--no-subagents] [--fork <job|name>] [--spec] [--spec-model <model>] [--spec-effort <level>] [--model <model>] [--effort <off|none|minimal|low|medium|high|xhigh|max>] [what Droid should investigate, solve, or continue]"
+argument-hint: "[--background|--wait] [--steerable] [--resume|--fresh] [--write|--run-commands] [--mcp-tool <server[/tool]>] [--no-web] [--no-subagents] [--fork <job|name>] [--spec] [--spec-model <model>] [--spec-effort <level>] [--model <model>] [--effort <off|none|minimal|low|medium|high|xhigh|max>] [what Droid should investigate, solve, or continue]"
 allowed-tools: Bash(node:*), AskUserQuestion, Agent
 ---
 
@@ -51,3 +51,5 @@ Default to read-only. Preserve an explicit `--write` flag; the runtime maps it t
 - `--no-web` and `--no-subagents` drop the web tools / the subagent tools from a read-only job. They are refused with `--write`, which keeps Droid's default toolset. The stop-time review gate always runs with `--no-web`.
 - `--fork <job|name>` starts a new Droid thread branched from an existing job or named session instead of continuing it. Forward it unchanged to `task`.
 - `--spec` runs the task in Droid's spec mode (it needs a Droid CLI that supports spec). `--spec-model` and `--spec-effort` choose the spec model and effort and are refused without `--spec`.
+- `--steerable` keeps the Droid session open so the user can send it more messages while it runs. Forward it to `task` together with `task`'s own `--background` (a steerable job always runs as a background job), and have the subagent return the job id as soon as the job is queued instead of waiting for it to finish: a steerable job stays running until it is ended. It works with every sandbox (`--write`, `--run-commands` or read-only), and is ignored for `--resume` and `--fork`, which run an ordinary turn.
+- The user steers the job with `node "${CLAUDE_PLUGIN_ROOT}/scripts/droid-companion.mjs" send <job-id> <message>` (or `send <job-id> --file <path>`); each message runs as the job's next turn. `send <job-id> --end` ends the job once its queued turns finish; it also ends after two idle minutes with nothing sent, or on `/droid:cancel`. `/droid:result <job-id>` shows the last turn's answer. If `task` or `send` prints a `warning:` line about a setting Droid ignored, show it to the user.

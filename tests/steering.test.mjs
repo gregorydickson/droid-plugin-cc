@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { initGitRepo, makeTempDir, run, writeExecutable } from "./helpers.mjs";
+import { initGitRepo, makeTempDir, run, smokeEnv, SMOKE_MODEL, writeExecutable } from "./helpers.mjs";
 import { listJobs, readJobFile, resolveJobFile, resolveJobsDir, upsertJob, writeJobFile } from "../plugins/droid/scripts/lib/state.mjs";
 import { steeringSocketPath } from "../plugins/droid/scripts/lib/tracked-jobs.mjs";
 import { installFakeDroid, buildEnv, SESSION_USAGE } from "./fake-droid-fixture.mjs";
@@ -395,3 +395,87 @@ test("a warning droid's transport reports is recorded on the finished job", { ti
   for (const name of ["autonomy", "tool list"]) assert.match(final.steeringWarning, new RegExp(`ignores the requested[^;]*${name}`));
   assert.ok(!c.withData(() => listJobs(c.cwd)).some(job => job.socketPath && fs.existsSync(job.socketPath)));
 });
+
+// ---- live: real droid on glm-5.3 (DROID_SMOKE=1, a Factory login on this machine) ----
+
+const live = { skip: process.env.DROID_SMOKE !== "1", timeout: 300000 };
+// The repository's own companion, so the job reads the recorded decision in docs/live-steering.md.
+const LIVE_SCRIPT = path.join(PLUGIN_DIR, "scripts", "droid-companion.mjs");
+const LIVE_CLI_TIMEOUT_MS = 60000;
+// Pinned above droid's first-turn latency so the session cannot idle out before the test sends.
+const LIVE_IDLE_MS = "240000";
+const DECISION = fs.readFileSync(fileURLToPath(new URL("../docs/live-steering.md", import.meta.url)), "utf8").trimEnd().split("\n").at(-1);
+const LIVE_UNSETTABLE = /^Decision: GO-WARN — not settable: (.+)$/.exec(DECISION)?.[1].split(", ") ?? [];
+const EDIT_TOOLS = ["Edit", "Create", "ApplyPatch", "MultiEdit", "Write"];
+const PROBE_FILE = "probe.txt";
+const CREATE_PROBE = `Use the Create tool to create ${PROBE_FILE} containing hi. Do not run any shell command. If you have no Create tool, reply exactly NO_CREATE_TOOL.`;
+// The sandbox whose one fence refuses the Create probe: run-commands runs at autonomy medium, so only
+// its tool list stands between glm and Create; read-only runs at autonomy off, which drops the edit tools.
+const FENCE_PROBES = { "tool list": ["--run-commands"], autonomy: [] };
+
+function liveSteering(t) {
+  const cwd = fs.realpathSync(makeTempDir("droid-steer-live-"));
+  initGitRepo(cwd);
+  fs.writeFileSync(path.join(cwd, "README.md"), "steer live\n");
+  run("git", ["add", "."], { cwd }); run("git", ["commit", "-m", "initial"], { cwd });
+  const env = { ...smokeEnv(), DROID_COMPANION_SESSION_ID: "steer-live", DROID_STEER_IDLE_MS: LIVE_IDLE_MS };
+  const cli = (...args) => {
+    const result = run(process.execPath, [LIVE_SCRIPT, ...args], { cwd, env, timeout: LIVE_CLI_TIMEOUT_MS });
+    assert.equal(result.status, 0, result.error?.message || result.stderr || result.stdout);
+    return result;
+  };
+  const record = id => {
+    const previous = process.env.CLAUDE_PLUGIN_DATA;
+    process.env.CLAUDE_PLUGIN_DATA = env.CLAUDE_PLUGIN_DATA;
+    try { return readJobFile(resolveJobFile(cwd, id)); } catch { return null; } finally { if (previous === undefined) delete process.env.CLAUDE_PLUGIN_DATA; else process.env.CLAUDE_PLUGIN_DATA = previous; }
+  };
+  const launch = (flags, prompt) => {
+    const { jobId } = JSON.parse(cli("task", "--steerable", "--background", "--json", "--model", SMOKE_MODEL, ...flags, prompt).stdout);
+    t.after(() => { if (["queued", "running"].includes(record(jobId)?.status)) run(process.execPath, [LIVE_SCRIPT, "cancel", jobId], { cwd, env, timeout: LIVE_CLI_TIMEOUT_MS }); });
+    return jobId;
+  };
+  // status --json leaves out socketPath, so readiness is read off the job record.
+  const steerable = id => until(() => { const job = record(id); return job?.status === "running" && job.socketPath && fs.existsSync(job.socketPath) && job; }, `${id}'s steering socket`, Date.now() + LIVE_CLI_TIMEOUT_MS);
+  const finished = id => until(() => { const job = record(id); return ["completed", "failed", "cancelled"].includes(job?.status) && !job.finalization && job; }, `${id} to finish`, Date.now() + live.timeout / 2);
+  const steer = async (id, message) => {
+    await steerable(id);
+    cli("send", id, message);
+    cli("send", id, "--end");
+    const job = await finished(id);
+    assert.equal(job.status, "completed", job.errorMessage);
+    return { job, output: JSON.parse(cli("result", id, "--json").stdout).rawOutput, log: fs.readFileSync(job.logFile, "utf8") };
+  };
+  return { cwd, record, launch, steerable, steer };
+}
+
+const editToolCalls = log => EDIT_TOOLS.filter(tool => log.includes(`Running tool: ${tool}`));
+
+test("live: a token sent to a steered glm job comes back as the job's result", live, async t => {
+  const s = liveSteering(t);
+  const token = `STEER-${randomUUID().slice(0, 8)}`;
+  const { output } = await s.steer(s.launch([], "Wait for my next message, then reply with exactly that message."), token);
+  assert.ok(output.includes(token), output);
+});
+
+test("live: a steered --write job given the Create probe creates the file, so a refusal elsewhere is the fence's", live, async t => {
+  const s = liveSteering(t);
+  await s.steer(s.launch(["--write"], "Reply with exactly READY."), CREATE_PROBE);
+  assert.ok(fs.existsSync(path.join(s.cwd, PROBE_FILE)), `${PROBE_FILE} was not created`);
+});
+
+for (const [fence, flags] of Object.entries(FENCE_PROBES)) {
+  const settable = !LIVE_UNSETTABLE.includes(fence);
+  test(`live: ${settable ? `a steered job's ${fence} refuses the Create probe` : `a steered job records a warning naming its ${fence}`} (${DECISION})`, live, async t => {
+    const s = liveSteering(t);
+    const id = s.launch(flags, "Reply with exactly READY.");
+    if (!settable) {
+      assert.match((await s.steerable(id)).steeringWarning ?? "", new RegExp(`ignores the requested[^;]*${fence}`));
+      return;
+    }
+    const { job, output, log } = await s.steer(id, CREATE_PROBE);
+    assert.ok(!fs.existsSync(path.join(s.cwd, PROBE_FILE)), `${PROBE_FILE} was created through the ${fence} fence`);
+    assert.deepEqual(editToolCalls(log), [], log);
+    assert.match(output, /NO_CREATE_TOOL/);
+    assert.ok(!("steeringWarning" in job), job.steeringWarning);
+  });
+}
