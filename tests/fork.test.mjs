@@ -237,8 +237,9 @@ test("a fork launched from another worktree is recorded in the parent's workspac
   assert.equal(inLinked.status, 0, inLinked.stderr + inLinked.stdout);
   const parent = JSON.parse(inLinked.stdout);
   const fork = ctx.cli("task", "--fork", "sibling-parent", "Explore");
-  const linkedJob = listJobs(linked).find(job => job.id === fork.jobId);
-  assert.deepEqual(linkedJob?.forkedFrom, { jobId: parent.jobId, threadId: listJobs(linked).find(job => job.id === parent.jobId).threadId });
+  const linkedJobs = listJobs(linked);
+  assert.deepEqual(linkedJobs.find(job => job.id === fork.jobId)?.forkedFrom,
+    { jobId: parent.jobId, threadId: linkedJobs.find(job => job.id === parent.jobId).threadId });
   assert.ok(!listJobs(ctx.root).some(job => job.id === fork.jobId), "the fork must not land in the launching worktree");
 });
 

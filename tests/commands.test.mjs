@@ -266,9 +266,10 @@ test("setup command's argument-hint lists exactly the flags the companion's setu
 });
 
 test("rescue, status and models docs name every user-facing feature they route", () => {
-  const rescueHint = flagsIn(argumentHint(read("commands/rescue.md")));
+  const rescue = read("commands/rescue.md");
+  const rescueHint = flagsIn(argumentHint(rescue));
   for (const flag of ["--no-web", "--no-subagents", "--fork", "--spec", "--spec-model", "--spec-effort", "--steerable"]) assert.ok(rescueHint.has(flag), `rescue.md argument-hint lacks ${flag}`);
-  assert.match(read("commands/rescue.md"), /^- The user steers the job with `node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/droid-companion\.mjs" send <job-id> <message>`/m);
+  assert.match(rescue, /^- The user steers the job with `node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/droid-companion\.mjs" send <job-id> <message>`/m);
   assert.match(read("commands/status.md"), /droid-companion\.mjs" sessions find <text>`/);
   assert.match(read("commands/models.md"), /tier aliases \(for example `glm-\{\.\.\.\}`\) and version wildcards \(for example `glm-\*`\)/);
 });
