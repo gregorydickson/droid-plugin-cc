@@ -4,7 +4,7 @@ Probed locally on 2026-10-10 with Droid `0.238.0`; messages advertised Factory A
 
 ## Chosen transport
 
-One `droid exec --output-format stream-jsonrpc --cwd DIR -f PROMPT_FILE` child per turn. No `--input-format`: this is the CLI's one-shot RPC-output mode. Unlike controlled RPC sessions, this mode applies CLI `-m`, `-r`, and `--session-id`. The local probe confirmed `-m gpt-6-luna -r low` in emitted settings. Help documents `--session-id` and `--auto medium`; successful authenticated resume remains unverified by these unauthenticated probes; fake transport tests cover the flag mapping.
+One `droid exec --cwd DIR -f PROMPT_FILE` child per one-shot turn, with the output format chosen by turn kind (see the argv table below); a fresh read-only, run-commands or write turn uses `--output-format stream-jsonrpc` with no `--input-format`, the CLI's one-shot RPC-output mode. A `--steerable` job is the exception: it holds one child open on stdin for the whole job. Unlike controlled RPC sessions, this mode applies CLI `-m`, `-r`, and `--session-id`. The local probe confirmed `-m gpt-6-luna -r low` in emitted settings. Help documents `--session-id` and `--auto medium`; successful authenticated resume remains unverified by these unauthenticated probes; fake transport tests cover the flag mapping.
 
 The child streams newline-delimited JSON objects. The adapter never parses human-readable stdout. Session history persists in Droid; the plugin stores the session ID for the next child, so a shared process/broker is unnecessary. Cancellation uses the shared process-tree terminator. Stored turn IDs include PID, process start time and process group identity; stale or unverifiable records are finalized without signalling that PID. If the OS cannot supply identity, only the owning live child handle authorizes termination. The existing git-worktree selection and recovery machinery stays in the plugin.
 
@@ -41,18 +41,18 @@ Reference: [Factory headless execution documentation](https://docs.factory.com/d
 
 ## Argv per turn kind (Droid 1.1.0)
 
-All turns pass `exec --cwd DIR -f PROMPT_FILE`. `-m`, `-r`, `--append-system-prompt-file FILE` (developer instructions) and `--tag '{"name":..., "metadata":{"jobId":..., "kind":...}}'` (job id and kind, Factory session metadata; omitted on a steerable job and on a CLI older than 1.1.0) apply where the turn kind allows them.
+One-shot turns pass `exec --cwd DIR -f PROMPT_FILE`. A steerable turn passes only `exec --input-format stream-jsonrpc --output-format stream-jsonrpc --cwd DIR` and sends the prompt, model, effort, autonomy and tools over stdin. On one-shot turns `-m`, `-r`, `--append-system-prompt-file FILE` (developer instructions) and `--tag '{"name":..., "metadata":{"jobId":..., "kind":...}}'` (job id and kind, Factory session metadata; omitted on a steerable job and on a CLI older than 1.1.0) apply where the turn kind allows them.
 
 | Turn kind | Output format | Fence and mode flags |
 |:---|:---|:---|
-| Fresh read-only | `stream-jsonrpc` | no `--auto`; `--only-tools` is `Read,LS,Grep,Glob,Execute` plus web, skill, todo and subagent tools (minus `--no-web` / `--no-subagents`) |
+| Fresh read-only | `stream-jsonrpc` | no `--auto`; `--only-tools` is `Read,LS,Grep,Glob,Execute` plus `WebSearch`, `FetchUrl`, `Skill`, `ToolSearch`, `TodoWrite` and the subagent tools `Task`, `TaskOutput`, `TaskStop` (minus `--no-web` / `--no-subagents`) |
 | Run-commands | `stream-jsonrpc` | `--auto medium --only-tools Read,LS,Grep,Glob,Execute` plus `MCP:` selectors |
 | Write | `stream-jsonrpc` | `--auto medium`, Droid's default toolset, selectors via `--add-tools` |
 | Resume | `stream-json` | the fence above plus `--session-id ID` |
 | Fork | `stream-json` | the fence above plus `--fork ID` (never on a repair turn) |
 | Spec | as the fence above | adds `--use-spec`, `--spec-model`, `--spec-reasoning-effort` |
 | Mission | `stream-json` | `--mission --auto high`, no tool fence, `--worker-model`, `--validator-model` and the matching `--*-reasoning-effort`; see [missions](missions.md) |
-| Schema repair | as the original turn | the narrow `Read,LS,Grep,Glob,Execute` list, no MCP selectors, no system prompt, no fork, no mission |
+| Schema repair | `stream-json` (it continues the session via `--session-id`, whatever the original turn used) | the narrow `Read,LS,Grep,Glob,Execute` list, no MCP selectors, no system prompt, no spec, no fork, no mission |
 | Steerable | held-open stdin JSON-RPC | see [live steering](live-steering.md) |
 
 Read-only turns have no file-editing tools but run at the autonomy in the user's Factory settings (for example `auto-high`), so Execute can still change files. The `Read,LS,Grep,Glob,Execute` list above is the run-commands and schema-repair list, and "Exec ended early: insufficient permission to proceed" is what a command above the autonomy ends with. The stop-time review gate passes `--no-web`.

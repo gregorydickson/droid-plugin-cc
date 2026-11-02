@@ -13,7 +13,7 @@ claude plugin marketplace add /absolute/path/to/droid-plugin-cc
 claude plugin install droid@droid-fork
 ```
 
-The marketplace manifest names this checkout `droid-fork`. Run `/droid:setup` after installation. Setup checks CLI availability; the first run checks authentication.
+The marketplace manifest names this checkout `droid-fork`. Run `/droid:setup` after installation. Setup checks CLI availability and runs `droid doctor` to report login and host health.
 
 ## Commands
 
@@ -39,7 +39,7 @@ Rescue supports `--background`, `--wait`, `--fresh`, `--model ID`, and `--effort
 
 ## Permissions and execution
 
-The companion starts `droid exec --output-format stream-jsonrpc` once per job. It reads structured progress and completion events and stores the returned session ID. There is no shared broker. The session history belongs to Droid; job records and rendered results belong to the plugin.
+The companion starts one `droid exec` child per turn, with the output format chosen by turn kind (`stream-jsonrpc` for fresh turns, `stream-json` for resume, fork, mission and schema repair); a `--steerable` job instead holds a single child open on stdin. It reads structured progress and completion events and stores the returned session ID. There is no shared broker. The session history belongs to Droid; job records and rendered results belong to the plugin.
 
 Read-only calls omit `--auto` and pass an `--only-tools` list of `Read,LS,Grep,Glob,Execute` plus the web tools (`WebSearch`, `FetchUrl`), `Skill`, `ToolSearch`, `TodoWrite` and the subagent tools. `--run-commands` and schema-repair turns keep the narrow five. Read-only jobs get no file-editing tools, but they run at the autonomy configured in your Factory settings (for example `auto-high`), so an Execute command can still change files. That is an accepted capability, not a fence; use `--worktree` when it matters. A mission runs at `--auto high` with Droid's full toolset and no tool fence, so start one only where that is acceptable. `--write` maps to `--auto medium`: local development operations, including package installs and local git operations, may be allowed. This is an autonomy policy, not an OS filesystem sandbox. The plugin never passes `--skip-permissions-unsafe`.
 

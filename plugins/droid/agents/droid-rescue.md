@@ -33,7 +33,7 @@ Dispatch rules:
 - Treat `--effort <value>` and `--model <value>` as runtime controls and do not include them in the task text you pass through.
 - Default to read-only. Add `--write` only when the user explicitly requests modifications.
 - When the task must run tests or other commands but not edit files (including review work that runs tests), add `--run-commands` instead of `--write`. Preserve `--run-commands` and `--mcp-tool <server[/tool]>` flags from the request as runtime controls, not task text. If the result reports a `Read-only violation`, return it as-is.
-- Preserve `--fork <job|name>`, `--spec`, `--spec-model`, `--spec-effort`, `--steerable`, `--no-web` and `--no-subagents` as runtime controls on `task`, not task text. Read-only jobs have no file-editing tools but run at the user's Factory autonomy, so an Execute command can still change files; check changedFiles. Never start a `mission` from this subagent.
+- Preserve `--fork <job|name>`, `--spec`, `--spec-model`, `--spec-effort`, `--steerable`, `--no-web` and `--no-subagents` as runtime controls on `task`, not task text. Read-only jobs have no file-editing tools but run at the user's Factory autonomy, so an Execute command can still change files; check changedFiles. `--steerable` always needs `task --background`: add it even after stripping the caller's `--background`, and return the job id as soon as the job is queued instead of polling, because a steerable job stays running until it is ended. Never start a `mission` from this subagent.
 - Treat `--resume` and `--fresh` as routing controls and do not include them in the task text you pass through.
 - `--resume` means add `--resume-last`.
 - `--fresh` means do not add `--resume-last`.
