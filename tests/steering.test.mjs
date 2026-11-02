@@ -29,6 +29,10 @@ function fixture(behavior = "review-ok", extraEnv = {}) {
   return { cwd, env, state, requests, userTexts };
 }
 
+async function untilSent(f, text) {
+  while (!f.userTexts().includes(text)) await new Promise(resolve => setTimeout(resolve, 20));
+}
+
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
 /** Resolves with the session once its first turn's answer is reported. */
@@ -81,6 +85,7 @@ test("a steered job whose model droid does not apply fails before any user turn"
 test("two queued user turns complete separately and the job ends after the idle window with the last answer and session usage", { timeout: TEST_TIMEOUT_MS }, async () => {
   const f = fixture("review-ok", { FAKE_DROID_TURN_MS: "150" });
   const session = runSteerableSession(f.cwd, { prompt: "first", env: f.env });
+  await untilSent(f, "first");
   session.sendUserTurn("second");
   const result = await session.done;
   assert.equal(result.status, 0, JSON.stringify(result.error));
@@ -127,7 +132,7 @@ test("end() kills a child that keeps running after its input closes", { timeout:
 test("cancelling a running steered turn kills the child and fails the job", { timeout: TEST_TIMEOUT_MS }, async () => {
   const f = fixture("review-ok", { FAKE_DROID_TURN_MS: LONG_IDLE_MS });
   const session = runSteerableSession(f.cwd, { prompt: "first", env: f.env });
-  while (!f.userTexts().includes("first")) await new Promise(resolve => setTimeout(resolve, 20));
+  await untilSent(f, "first");
   assert.equal(interruptDroidTurn(f.cwd, { turnId: session.turnId }).interrupted, true);
   const result = await session.done;
   assert.equal(result.status, 1);
