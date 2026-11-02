@@ -1,8 +1,14 @@
 import fs from "node:fs";
+import os from "node:os";
+import { createHash } from "node:crypto";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { makeTempDir } from "./helpers.mjs";
+import { initGitRepo, makeTempDir, run, writeExecutable } from "./helpers.mjs";
+import { listJobs, readJobFile, resolveJobFile, resolveJobsDir, upsertJob, writeJobFile } from "../plugins/droid/scripts/lib/state.mjs";
+import { steeringSocketPath } from "../plugins/droid/scripts/lib/tracked-jobs.mjs";
 import { installFakeDroid, buildEnv, SESSION_USAGE } from "./fake-droid-fixture.mjs";
 import { buildDroidExecArgs, interruptDroidTurn, runSteerableSession } from "../plugins/droid/scripts/lib/droid.mjs";
 import { jobUsage } from "../plugins/droid/scripts/lib/job-results.mjs";
@@ -26,7 +32,7 @@ function fixture(behavior = "review-ok", extraEnv = {}) {
   const inputRequests = () => { try { return state().inputRequests ?? []; } catch { return []; } };
   const requests = method => inputRequests().filter(request => request.method === method);
   const userTexts = () => requests("droid.add_user_message").map(request => request.params.text);
-  return { cwd, env, state, requests, userTexts };
+  return { cwd, bin, env, state, inputRequests, requests, userTexts };
 }
 
 async function untilSent(f, text) {
@@ -182,4 +188,210 @@ test("the final steered answer is schema-checked and repaired once by a one-shot
   const repair = f.state().threadRequests.at(-1).args;
   assert.equal(flagValue(repair, "--session-id"), f.state().threads.find(thread => thread.cwd === f.cwd).id);
   assert.ok(!repair.includes("--input-format"), repair.join(" "));
+});
+
+// ---- send over a task --steerable job's socket, through the CLI ----
+
+const PLUGIN_DIR = fileURLToPath(new URL("../plugins/droid", import.meta.url));
+const CLI_TIMEOUT_MS = 120000;
+const PROMPT = "steer me";
+const DECISION_LINES = { GO: "Decision: GO", "GO-WARN": "Decision: GO-WARN — not settable: autonomy, tool list" };
+const UNSETTABLE = DECISION_LINES["GO-WARN"].split(": ").at(-1).split(", ");
+const SANDBOX_FLAGS = { "read-only": [], "run-commands": ["--run-commands"], write: ["--write"], "read-only under droid-lock.sh": [] };
+const companions = new Map();
+
+/** A copy of the plugin whose repository's docs/live-steering.md ends with `decision`'s line. */
+function companionWith(decision) {
+  if (!companions.has(decision)) {
+    const root = makeTempDir("droid-steer-plugin-");
+    fs.cpSync(PLUGIN_DIR, path.join(root, "plugins", "droid"), { recursive: true });
+    fs.mkdirSync(path.join(root, "docs"));
+    fs.writeFileSync(path.join(root, "docs", "live-steering.md"), `# Live steering\n\n## Decision\n\n${DECISION_LINES[decision]}\n`);
+    companions.set(decision, path.join(root, "plugins", "droid", "scripts", "droid-companion.mjs"));
+  }
+  return companions.get(decision);
+}
+
+async function until(probe, what, deadline = Date.now() + 30000) {
+  for (;;) {
+    const value = probe();
+    if (value) return value;
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+}
+
+function cliFixture(t, { decision = "GO", lane = false, env: extraEnv = {} } = {}) {
+  const f = fixture("review-ok", { DROID_STEER_IDLE_MS: LONG_IDLE_MS, ...extraEnv });
+  initGitRepo(f.cwd);
+  fs.writeFileSync(path.join(f.cwd, "README.md"), "steer\n");
+  run("git", ["add", "."], { cwd: f.cwd }); run("git", ["commit", "-m", "initial"], { cwd: f.cwd });
+  const data = makeTempDir("droid-steer-data-");
+  const env = { ...f.env, CLAUDE_PLUGIN_DATA: data, DROID_COMPANION_SESSION_ID: "steer-tests" };
+  if (lane) {
+    env.DROID_BINARY = path.join(f.bin, "droid-lock.sh");
+    writeExecutable(env.DROID_BINARY, fs.readFileSync(path.join(f.bin, "droid.cjs"), "utf8"));
+  }
+  const script = companionWith(decision);
+  const invoke = (...args) => run(process.execPath, [script, ...args], { cwd: f.cwd, env, timeout: 30000 });
+  // The state helpers resolve the data dir from process.env at call time.
+  const withData = action => {
+    const previous = process.env.CLAUDE_PLUGIN_DATA;
+    process.env.CLAUDE_PLUGIN_DATA = data;
+    try { return action(); } finally { if (previous === undefined) delete process.env.CLAUDE_PLUGIN_DATA; else process.env.CLAUDE_PLUGIN_DATA = previous; }
+  };
+  const job = id => withData(() => { try { return readJobFile(resolveJobFile(f.cwd, id)); } catch { return null; } });
+  const write = record => withData(() => { writeJobFile(f.cwd, record.id, record); upsertJob(f.cwd, record); });
+  const started = [];
+  const launch = (...flags) => {
+    const result = invoke("task", "--steerable", "--background", "--json", ...flags, PROMPT);
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+    const { jobId } = JSON.parse(result.stdout);
+    started.push(jobId);
+    return { jobId, stderr: result.stderr };
+  };
+  const steerable = async id => until(() => { const record = job(id); return record?.status === "running" && record.socketPath && fs.existsSync(record.socketPath) && record; }, `${id}'s steering socket`);
+  const finished = async id => until(() => { const record = job(id); return ["completed", "failed", "cancelled"].includes(record?.status) && !record.finalization && record; }, `${id} to finish`);
+  t.after(() => { for (const id of started) if (["queued", "running"].includes(job(id)?.status)) invoke("cancel", id); });
+  return { ...f, data, env, invoke, job, write, launch, steerable, finished, withData };
+}
+
+test("task --steerable requires --background", { timeout: CLI_TIMEOUT_MS }, t => {
+  const c = cliFixture(t);
+  const result = c.invoke("task", "--steerable", PROMPT);
+  assert.equal(result.status, 1);
+  assert.equal(result.stderr.trim(), "--steerable requires --background.");
+});
+
+test("task --steerable is refused below the Droid version floor", { timeout: CLI_TIMEOUT_MS }, t => {
+  const c = cliFixture(t, { env: { FAKE_DROID_VERSION: "1.0.0" } });
+  const result = c.invoke("task", "--steerable", "--background", PROMPT);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /requires Droid CLI >= 1\.1\.0 \(found 1\.0\.0\)/);
+});
+
+/** A stale socket file: a listener that died without unlinking it. */
+function staleSocket(dir) {
+  const socketPath = path.join(dir, "stale.sock");
+  spawnSync(process.execPath, ["-e", `require("node:net").createServer().listen(${JSON.stringify(socketPath)}, () => process.kill(process.pid, "SIGKILL"))`], { timeout: 10000 });
+  assert.ok(fs.existsSync(socketPath), "stale socket was not left behind");
+  return socketPath;
+}
+
+test("every send to a target that cannot take the message exits 1 with its reason and writes nothing to droid", { timeout: CLI_TIMEOUT_MS }, async t => {
+  const c = cliFixture(t);
+  const done = c.launch();
+  await c.steerable(done.jobId);
+  assert.equal(c.invoke("send", done.jobId, "--end").status, 0);
+  await c.finished(done.jobId);
+  const live = c.launch();
+  const running = await c.steerable(live.jobId);
+  await untilSent(c, PROMPT);
+  // Copies of the live record keep its socket, so only the refusal stands between the message and droid.
+  const forged = (suffix, change) => { const record = { ...running, id: `${running.id}-${suffix}`, name: null, ...change }; c.write(record); return record.id; };
+  const plain = forged("plain", { steerable: false });
+  const paused = forged("paused", { status: "awaiting-answer" });
+  const stale = forged("stale", { socketPath: staleSocket(makeTempDir("droid-steer-stale-")) });
+  const rows = [
+    ["an unknown ref", ["nope", "hello"], "Unknown session: nope"],
+    ["a completed job", [done.jobId, "hello"], "Job is not running."],
+    ["a job started without --steerable", [plain, "hello"], "Job was not started with --steerable."],
+    ["a job awaiting an answer", [paused, "hello"], "Job is awaiting an answer; use answer <ref> <text>."],
+    ["a job whose socket file is stale", [stale, "hello"], "Steering socket is unavailable."],
+    ["an empty message", [live.jobId, "  "], "Provide a message or --file."]
+  ];
+  for (const [label, args, message] of rows) {
+    const before = c.inputRequests();
+    const result = c.invoke("send", ...args);
+    assert.equal(result.status, 1, `${label}: ${result.stdout}`);
+    assert.equal(result.stderr.trim(), message, label);
+    assert.equal(result.stdout, "", label);
+    assert.deepEqual(c.inputRequests(), before, label);
+  }
+  // A refused message that slipped through would reach droid ahead of this one.
+  assert.equal(c.invoke("send", live.jobId, "probe").status, 0);
+  await untilSent(c, "probe");
+  assert.deepEqual(c.userTexts(), [PROMPT, "probe"]);
+});
+
+test("send queues the message as the next user turn mid-turn, and cancel removes the socket and the droid child", { timeout: CLI_TIMEOUT_MS }, async t => {
+  const c = cliFixture(t, { env: { FAKE_DROID_TURN_MS: "1500" } });
+  const { jobId } = c.launch();
+  const record = await c.steerable(jobId);
+  await untilSent(c, PROMPT);
+  const file = path.join(makeTempDir("droid-steer-msg-"), "message.txt");
+  fs.writeFileSync(file, "second line one\nsecond line two");
+  const sent = c.invoke("send", jobId, "--file", file);
+  assert.equal(sent.status, 0, sent.stderr);
+  assert.equal(sent.stdout, `sent to ${jobId}\n`);
+  assert.deepEqual(c.userTexts(), [PROMPT], "the message must wait for the running turn");
+  await untilSent(c, "second line one\nsecond line two");
+  assert.deepEqual(c.userTexts(), [PROMPT, "second line one\nsecond line two"]);
+  const droidPid = c.state().inputPid;
+  const cancelled = c.invoke("cancel", jobId, "--json");
+  assert.equal(cancelled.status, 0, cancelled.stderr);
+  assert.equal(JSON.parse(cancelled.stdout).status, "cancelled");
+  assert.ok(await until(() => !fs.existsSync(record.socketPath), "the socket file to go"));
+  assert.ok(await exits(droidPid), `droid ${droidPid} still running`);
+});
+
+test("the steering socket sits in the jobs dir unless that path overflows sun_path, then in a short temp path", () => {
+  const jobId = "task-steer-path";
+  const withRoot = (root, action) => {
+    const previous = process.env.CLAUDE_PLUGIN_DATA;
+    process.env.CLAUDE_PLUGIN_DATA = root;
+    try { return action(); } finally { if (previous === undefined) delete process.env.CLAUDE_PLUGIN_DATA; else process.env.CLAUDE_PLUGIN_DATA = previous; }
+  };
+  const short = withRoot(fs.mkdtempSync("/tmp/ds-"), () => [steeringSocketPath("/r", jobId), path.join(resolveJobsDir("/r"), `${jobId}.sock`)]);
+  assert.equal(short[0], short[1]);
+  const long = withRoot(path.join(makeTempDir(), "x".repeat(100)), () => steeringSocketPath("/r", jobId));
+  assert.equal(long, path.join(os.tmpdir(), `droid-${createHash("sha256").update(jobId).digest("hex").slice(0, 12)}.sock`));
+  for (const socketPath of [short[0], long]) assert.ok(Buffer.byteLength(socketPath) <= 100, socketPath);
+});
+
+test("a running steerable job records the socket path the worker listens on", { timeout: CLI_TIMEOUT_MS }, async t => {
+  const c = cliFixture(t);
+  const { jobId } = c.launch();
+  const { socketPath } = await c.steerable(jobId);
+  assert.equal(socketPath, c.withData(() => steeringSocketPath(c.cwd, jobId)));
+  assert.equal(c.invoke("send", jobId, "--end").status, 0);
+  await c.finished(jobId);
+  assert.ok(!fs.existsSync(socketPath), `${socketPath} outlived its job`);
+});
+
+for (const [sandbox, flags] of Object.entries(SANDBOX_FLAGS)) {
+  for (const decision of Object.keys(DECISION_LINES)) {
+    test(`a ${sandbox} task --steerable job runs under ${decision}${decision === "GO" ? " with no warning" : ", and the record and every send carry the warning"}`, { timeout: CLI_TIMEOUT_MS }, async t => {
+      const c = cliFixture(t, { decision, lane: sandbox.includes("droid-lock.sh") });
+      const { jobId, stderr } = c.launch(...flags);
+      const record = await c.steerable(jobId);
+      const warned = decision === "GO-WARN";
+      assert.equal("steeringWarning" in record, warned, JSON.stringify(record.steeringWarning));
+      if (warned) for (const name of UNSETTABLE) assert.match(record.steeringWarning, new RegExp(`ignores the requested[^;]*${name}.*session's[^;]*${name}`));
+      const line = `warning: ${record.steeringWarning}`;
+      assert.equal(stderr.includes("warning:"), warned, stderr);
+      if (warned) assert.ok(stderr.includes(line), stderr);
+      for (const args of [["hello"], ["--end"]]) {
+        const sent = c.invoke("send", jobId, ...args);
+        assert.equal(sent.status, 0, sent.stderr);
+        assert.equal(sent.stdout, `sent to ${jobId}\n`);
+        assert.equal(sent.stderr, warned ? `${line}\n` : "", args.join(" "));
+      }
+      const final = await c.finished(jobId);
+      assert.equal(final.status, "completed", final.errorMessage);
+      assert.equal(final.steeringWarning, record.steeringWarning);
+      assert.ok(c.userTexts().includes("hello"));
+    });
+  }
+}
+
+test("a warning droid's transport reports is recorded on the finished job", { timeout: CLI_TIMEOUT_MS }, async t => {
+  const c = cliFixture(t, { env: { FAKE_DROID_IGNORE_SETTINGS: "autonomyLevel,restrictToolIds" } });
+  const { jobId } = c.launch();
+  assert.ok(!("steeringWarning" in await c.steerable(jobId)));
+  assert.equal(c.invoke("send", jobId, "--end").status, 0);
+  const final = await c.finished(jobId);
+  assert.equal(final.status, "completed", final.errorMessage);
+  for (const name of ["autonomy", "tool list"]) assert.match(final.steeringWarning, new RegExp(`ignores the requested[^;]*${name}`));
+  assert.ok(!c.withData(() => listJobs(c.cwd)).some(job => job.socketPath && fs.existsSync(job.socketPath)));
 });

@@ -2,6 +2,7 @@
 
 import { spawn, execFileSync } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -25,6 +26,7 @@ import {
     parseStructuredOutput,
     readOutputSchema,
     runDroidTurn,
+    runSteerableSession,
     JOB_KINDS
   } from "./lib/droid.mjs";
 import { resolveRuntimeOptions } from "./lib/runtime-options.mjs";
@@ -89,9 +91,9 @@ const REVIEW_SCHEMA = path.join(ROOT_DIR, "schemas", "review-output.schema.json"
 const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 240000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 2000;
 const WORKER_VALUE_OPTIONS = ["output-schema", "result-file", "notify-socket", "mcp-config", "profile", "name", "brief", "instructions", "preread", "worktree", "lock-cmd", "unlock-cmd", "fanout", "on-start", "on-progress", "on-stop-report", "on-end", "on-fail", "mcp-tool"];
-const WORKER_BOOLEAN_OPTIONS = ["persistent", "pause-and-ask", "run-commands", "no-web", "no-subagents"];
+const WORKER_BOOLEAN_OPTIONS = ["persistent", "pause-and-ask", "run-commands", "no-web", "no-subagents", "steerable"];
 // Tool-fence options replay on resume like worker options but do not switch output to the structured envelope.
-const TOOL_FENCE_OPTIONS = ["run-commands", "mcp-tool", "no-web", "no-subagents"];
+const TOOL_FENCE_OPTIONS = ["run-commands", "mcp-tool", "no-web", "no-subagents", "steerable"];
 const WORKER_PATH_OPTIONS = ["output-schema", "result-file", "notify-socket", "mcp-config", "brief", "instructions", "preread", "worktree"];
 // Per-turn input: the resumed thread already holds the previous slice's brief and preread.
 const PER_TURN_WORKER_OPTIONS = ["brief", "preread"];
@@ -105,6 +107,10 @@ const LANE_WRAPPER_BINARY = "droid-lock.sh";
 const MISSION_TITLE = "Droid Mission";
 const GLOBAL_DEFAULTS_SCOPE = "Defaults apply to all workspaces using this plugin data dir.";
 const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude turn.";
+// The recorded steering decision (Decision: GO | GO-WARN — not settable: <list> | NO-GO — …). It sits at the
+// repository root, outside the shipped plugin; an installed copy finds none and relies on the transport's warning.
+const LIVE_STEERING_DOC = path.resolve(ROOT_DIR, "..", "..", "docs", "live-steering.md");
+const STEERING_REPLY_TIMEOUT_MS = 10000;
 
 function printUsage() {
   console.log(
@@ -121,17 +127,18 @@ function printUsage() {
       "  node scripts/droid-companion.mjs result [job-id] [--json]",
       "  node scripts/droid-companion.mjs cancel [job-id] [--json]",
       "  node scripts/droid-companion.mjs sessions list|stop|resume [name] [prompt] [worker options] [--json]",
-      "  node scripts/droid-companion.mjs send <job|name> <message> [--json]",
+      "  node scripts/droid-companion.mjs send <job|name> <message> | --file <path> | --end [--json]",
       "  node scripts/droid-companion.mjs answer <job|name> <answer> [--file <path>] [--json]",
       "  node scripts/droid-companion.mjs compare --brief <file> --schema <file> --against <command> [--json]",
       "  node scripts/droid-companion.mjs verify-claims <claims.json> [--json]",
       "Worker options: --output-schema <file> --result-file <file> --notify-socket <path>",
       "  --name <name> --persistent --pause-and-ask --brief <file> --instructions <file> --preread <file>",
       "  --worktree <path> --lock-cmd <command> --unlock-cmd <command>",
+      "  --steerable (task --background only) keeps the session open for `send`; it ends after DROID_STEER_IDLE_MS idle, `send --end` or cancel",
       "Tool fence (task, review, adversarial-review): --run-commands runs commands at --auto medium with read-only tools (not with --write; workspace changes are reported as a violation)",
       "  --mcp-tool <server[/tool]> (repeatable) enables MCP:<selector>; read-only jobs get no MCP tools otherwise",
       "  --no-web / --no-subagents drop the web tools / the subagent tools from a read-only job (not with --write)",
-      "Unsupported: --profile, --mcp-config, --fanout, live send steering, native transcript transfer.",
+      "Unsupported: --profile, --mcp-config, --fanout, native transcript transfer.",
       "  --on-start|--on-progress|--on-stop-report|--on-end|--on-fail <command>",
       "Effort levels vary per model; `models` lists each model's supported levels.",
       "Defaults: --model/--effort, then DROID_DEFAULT_MODEL/DROID_DEFAULT_EFFORT, then `setup --default-model/--default-effort` apply when omitted (not on resume)."
@@ -566,7 +573,7 @@ async function executeTaskRun(request) {
     throw new Error("Provide a prompt, a prompt file, piped stdin, or use --resume-last.");
   }
 
-  const result = await runDroidTurn(workspaceRoot, {
+  const turnOptions = {
     ...request,
     resumeThreadId,
     prompt: request.prompt,
@@ -578,7 +585,11 @@ async function executeTaskRun(request) {
     tag: jobTag(request.jobId, "task"),
     persistThread: true,
     threadName: resumeThreadId ? null : request.name ?? buildPersistentTaskThreadName(request.prompt || DEFAULT_CONTINUE_PROMPT)
-  });
+  };
+  // The steered transport always opens a new session, so a resumed, answered or forked turn runs one-shot.
+  const result = request.steerable && !resumeThreadId && !request.forkThreadId
+    ? await runSteeredTurn(workspaceRoot, turnOptions)
+    : await runDroidTurn(workspaceRoot, turnOptions);
 
   const rawOutput = typeof result.finalMessage === "string" ? result.finalMessage : "";
   const failureMessage = result.error?.message ?? result.stderr ?? "";
@@ -613,8 +624,15 @@ async function executeTaskRun(request) {
     summary: firstMeaningfulLine(rawOutput, firstMeaningfulLine(failureMessage, `${taskMetadata.title} finished.`)),
     jobTitle: taskMetadata.title,
     jobClass: "task",
-    write: Boolean(request.write)
+    write: Boolean(request.write),
+    ...(result.steeringWarning ? { steeringWarning: result.steeringWarning } : {})
   };
+}
+
+async function runSteeredTurn(workspaceRoot, options) {
+  const session = runSteerableSession(workspaceRoot, options);
+  await options.attachSteering?.(session);
+  return session.done;
 }
 
 async function executeMissionRun(request) {
@@ -861,6 +879,7 @@ async function handleReviewCommand(argv, config) {
     summary: metadata.summary
   });
   if (options["pause-and-ask"] || options.name || options.persistent || options.fanout) throw new Error("Named sessions, persistence, pause-and-ask, and fanout are supported by task only.");
+  if (options.steerable) throw new Error("--steerable is supported by task only.");
   const worker = await prepareWorkerOptions(cwd, options);
   worker.developerInstructions = [worker.developerInstructions, worker.briefText, worker.inputContext].filter(Boolean).join("\n\n");
   Object.assign(job, worker, resolveModelChoice(options));
@@ -947,6 +966,7 @@ async function prepareWorkerOptions(cwd, options) {
     mcpTools,
     noWeb: Boolean(options["no-web"]),
     noSubagents: Boolean(options["no-subagents"]),
+    steerable: Boolean(options.steerable),
     structured: [...WORKER_VALUE_OPTIONS, ...WORKER_BOOLEAN_OPTIONS].some(key => !TOOL_FENCE_OPTIONS.includes(key) && options[key] != null)
   };
 }
@@ -981,6 +1001,7 @@ async function handleTask(argv) {
   const workspaceRoot = resolveWorkspaceRoot(cwd);
   const resumeLast = Boolean(options["resume-last"] || options.resume);
   const spec = resolveSpecOptions(options);
+  const steeringWarning = resolveSteeringOptions(options);
   if (resumeLast && options.fresh) throw new Error("Choose either --resume/--resume-last or --fresh.");
   if (options.fork != null) {
     if (resumeLast) throw new Error("Choose either --resume/--resume-last or --fork.");
@@ -997,7 +1018,7 @@ async function handleTask(argv) {
   requireTaskRequest(prompt, resumeLast);
   const write = Boolean(options.write);
   const taskMetadata = buildTaskRunMetadata({ prompt, resumeLast });
-  const job = { ...buildTaskJob(workspaceRoot, taskMetadata, write), ...worker, model, effort };
+  const job = { ...buildTaskJob(workspaceRoot, taskMetadata, write), ...worker, model, effort, ...(steeringWarning ? { steeringWarning } : {}) };
 
   const request = { ...buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId: job.id }), ...worker, ...(resumeLast ? {} : spec) };
   job.request = request;
@@ -1006,10 +1027,29 @@ async function handleTask(argv) {
   if (options.background) {
     ensureDroidAvailable(cwd);
     const { payload } = await enqueueBackgroundTask(cwd, job, request);
+    if (steeringWarning) process.stderr.write(`warning: ${steeringWarning}\n`);
     outputCommandResult(payload, renderQueuedTaskLaunch(payload), options.json);
     return;
   }
   await runForegroundCommand(job, progress => executeTaskRun({ ...request, onProgress: progress }), { json: options.json });
+}
+
+/** The warning a GO-WARN decision line names, as the transport words it; null under GO or with no recorded decision. */
+function recordedSteeringWarning() {
+  let doc;
+  try { doc = fs.readFileSync(LIVE_STEERING_DOC, "utf8"); } catch { return null; }
+  const unsettable = /^Decision: GO-WARN — not settable: (.+)$/m.exec(doc)?.[1].split(",").map(name => name.trim()).filter(Boolean);
+  if (!unsettable?.length) return null;
+  const names = unsettable.join(" and ");
+  return `Droid input mode ignores the requested ${names}; this steered job runs with the session's ${names}.`;
+}
+
+/** --steerable is validated per fresh task, on every sandbox; returns the decision's warning for the job record. */
+function resolveSteeringOptions(options) {
+  if (!options.steerable) return null;
+  if (!options.background) throw new Error("--steerable requires --background.");
+  requireDroidCapability("steer", getDroidVersion().version);
+  return recordedSteeringWarning();
 }
 
 /** A compatibility check, not a safety gate: the lane wrapper refuses --mission, so fail with a clear message first. */
@@ -1109,7 +1149,7 @@ async function handleTaskWorker(argv) {
       workspaceRoot,
       logFile
     },
-    () => execute({ ...request, onProgress: progress }),
+    ({ attachSteering } = {}) => execute({ ...request, onProgress: progress, attachSteering }),
     { logFile }
   );
 }
@@ -1411,8 +1451,41 @@ async function handleAnswer(argv) {
   return resumeSession(job, `Answer to your stop report:\n${answer}\nContinue the original brief on this thread.`, { ...options, answering: true, structured: true });
 }
 
-async function handleSend() {
-  throw new Error("Live steering is unavailable for one-shot Droid jobs. Cancel or resume with another prompt.");
+/** Delivers one steering message to the job's socket and resolves with the worker's reply. */
+function deliverSteeringMessage(socketPath, message) {
+  return new Promise((resolve, reject) => {
+    const unavailable = () => reject(new Error("Steering socket is unavailable."));
+    const socket = net.connect(socketPath);
+    socket.setTimeout(STEERING_REPLY_TIMEOUT_MS, () => { socket.destroy(); unavailable(); });
+    socket.on("error", unavailable);
+    let buffered = "";
+    socket.on("data", chunk => {
+      buffered += chunk;
+      const newline = buffered.indexOf("\n");
+      if (newline < 0) return;
+      socket.end();
+      try { resolve(JSON.parse(buffered.slice(0, newline))); } catch { unavailable(); }
+    });
+    socket.once("close", unavailable);
+    socket.once("connect", () => socket.write(`${JSON.stringify(message)}\n`));
+  });
+}
+
+async function handleSend(argv) {
+  const { options, positionals } = parseCommandInput(argv, { valueOptions: ["cwd", "file"], booleanOptions: ["json", "end"] });
+  const cwd = resolveCommandCwd(options);
+  const [reference, ...words] = positionals;
+  const job = selectedSession(cwd, reference);
+  if (job.status === "awaiting-answer") throw new Error("Job is awaiting an answer; use answer <ref> <text>.");
+  if (job.status !== "running") throw new Error("Job is not running.");
+  if (!job.steerable) throw new Error("Job was not started with --steerable.");
+  const text = options.end ? null : options.file ? fs.readFileSync(path.resolve(cwd, options.file), "utf8") : words.join(" ");
+  if (!options.end && !text.trim()) throw new Error("Provide a message or --file.");
+  if (!job.socketPath) throw new Error("Steering socket is unavailable.");
+  const reply = await deliverSteeringMessage(job.socketPath, options.end ? { end: true } : { text });
+  if (!reply?.ok) throw new Error(reply?.error ?? "Steering socket is unavailable.");
+  if (job.steeringWarning) process.stderr.write(`warning: ${job.steeringWarning}\n`);
+  outputCommandResult({ jobId: job.id, sent: true, ...(options.end ? { end: true } : {}), ...(job.steeringWarning ? { steeringWarning: job.steeringWarning } : {}) }, `sent to ${job.id}\n`, options.json);
 }
 
 async function runComparisonPeer(command, cwd, input) {

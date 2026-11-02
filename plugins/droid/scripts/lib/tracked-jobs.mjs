@@ -1,7 +1,11 @@
 import fs from "node:fs";
+import net from "node:net";
+import os from "node:os";
+import path from "node:path";
+import { createInterface } from "node:readline";
 import { interruptDroidTurn } from "./droid.mjs";
 import process from "node:process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { withFileLockSync } from "./file-lock.mjs";
@@ -9,7 +13,7 @@ import { atomicWriteJson, emitJobEvent, formatReadOnlyViolation, jobUsage, resul
 import { snapshotChangedFiles, changedFilesSince, validateWorktree } from "./worktree-jobs.mjs";
 export { resultEnvelope } from "./job-results.mjs";
 
-import { listJobs, readJobFile, resolveJobFile, resolveJobLogFile, upsertJob, writeJobFile } from "./state.mjs";
+import { listJobs, readJobFile, resolveJobFile, resolveJobLogFile, resolveJobsDir, upsertJob, writeJobFile } from "./state.mjs";
 
 export const SESSION_ID_ENV = "DROID_COMPANION_SESSION_ID";
 
@@ -311,6 +315,51 @@ function updateActiveJob(job, update) {
   }, { timeoutMs: 45000 });
 }
 
+// macOS caps a unix socket path (sun_path) at 104 bytes.
+const MAX_SOCKET_PATH_BYTES = 100;
+
+/** `<jobs dir>/<jobId>.sock`, or a short temp-dir path when that would not fit in sun_path. */
+export function steeringSocketPath(workspaceRoot, jobId) {
+  const preferred = path.join(resolveJobsDir(workspaceRoot), `${jobId}.sock`);
+  if (Buffer.byteLength(preferred) <= MAX_SOCKET_PATH_BYTES) return preferred;
+  return path.join(os.tmpdir(), `droid-${createHash("sha256").update(jobId).digest("hex").slice(0, 12)}.sock`);
+}
+
+/**
+ * The job's steering socket: each line is `{"text": …}` (the next user turn) or `{"end": true}`,
+ * answered by one `{"ok": true}` or `{"ok": false, "error": …}` line. Records `socketPath` on the job.
+ */
+async function listenForSteering(job, session) {
+  const socketPath = steeringSocketPath(job.workspaceRoot, job.id);
+  fs.rmSync(socketPath, { force: true });
+  const connections = new Set();
+  const server = net.createServer(socket => {
+    connections.add(socket);
+    socket.on("close", () => connections.delete(socket));
+    socket.on("error", () => {});
+    createInterface({ input: socket }).on("line", line => {
+      let reply;
+      try {
+        const message = JSON.parse(line);
+        if (message?.end === true) session.end();
+        else if (typeof message?.text === "string") session.sendUserTurn(message.text);
+        else throw new Error("Steering messages carry text or end.");
+        reply = { ok: true };
+      } catch (error) { reply = { ok: false, error: error.message }; }
+      socket.write(`${JSON.stringify(reply)}\n`);
+    });
+  });
+  await new Promise((resolve, reject) => { server.once("error", reject); server.listen(socketPath, resolve); });
+  updateActiveJob(job, current => ({ ...current, socketPath }));
+  return () => new Promise(resolve => {
+    server.close(() => resolve());
+    for (const socket of connections) socket.destroy();
+    fs.rmSync(socketPath, { force: true });
+  });
+}
+
+const steeringFields = execution => (execution.steeringWarning ? { steeringWarning: execution.steeringWarning } : {});
+
 function finishedExecution(job, structured) {
   return { exitStatus: job.status === "completed" ? 0 : 1, payload: structured ? resultEnvelope(job) : (job.result ?? null), rendered: job.rendered ?? `Job ${job.id ?? ""} ${job.status}.\n` };
 }
@@ -347,7 +396,14 @@ export async function runTrackedJob(job, runner, options = {}) {
     const beforeRun = readStoredJobOrNull(job.workspaceRoot, job.id);
     if (!beforeRun || TERMINAL_STATUSES.has(beforeRun.status)) return finishedExecution(beforeRun ?? { status: "cancelled" }, job.structured);
     if (beforeRun.cancelRequested) return finishedExecution(await finalizeTrackedJob(job.workspaceRoot, job.id, { status: "cancelled" }), job.structured);
-    const execution = await runner();
+    let closeSteering = null;
+    const attachSteering = job.steerable ? async session => {
+      try { closeSteering = await listenForSteering(job, session); }
+      catch (error) { appendLogLine(runningRecord.logFile, `Steering socket failed: ${error.message}`); }
+    } : undefined;
+    let execution;
+    try { execution = await runner({ attachSteering }); }
+    finally { await closeSteering?.(); }
     const payload = execution.payload;
     let stopReport = payload?.result ?? null;
     if (!stopReport && payload?.rawOutput) { try { stopReport = JSON.parse(payload.rawOutput); } catch {} }
@@ -362,7 +418,7 @@ export async function runTrackedJob(job, runner, options = {}) {
       closeSegment(job.workspaceRoot, job.id);
       const paused = updateActiveJob(job, current => {
         if (current.cancelRequested) return { ...current, finalization: null };
-        const next = { ...current, status: "awaiting-answer", phase: "awaiting-answer", pid: null, workerPid: null, threadId: execution.threadId, turnId: execution.turnId, result: { ...payload, changedFiles: current.changedFiles ?? [] }, rendered: execution.rendered, finalization: null, pauseDelivery: { id: randomUUID(), senderPid: process.pid },
+        const next = { ...current, status: "awaiting-answer", phase: "awaiting-answer", pid: null, workerPid: null, threadId: execution.threadId, turnId: execution.turnId, result: { ...payload, changedFiles: current.changedFiles ?? [] }, rendered: execution.rendered, finalization: null, pauseDelivery: { id: randomUUID(), senderPid: process.pid }, ...steeringFields(execution),
           ...sessionUsageFields(job.workspaceRoot, job.id, execution.threadId, execution.usage ?? payload?.usage ?? null) };
         if (next.worktree && next.changedFilesError) throw new Error(`Changed-file report failed: ${next.changedFilesError}`);
         if (next.unlockError) throw new Error(`Worktree unlock failed: ${next.unlockError}`);
@@ -389,7 +445,7 @@ export async function runTrackedJob(job, runner, options = {}) {
     if (job.outputSchema != null && checked.schemaValid === false && execution.exitStatus === 0) execution.exitStatus = 1;
     const completed = await finalizeTrackedJob(job.workspaceRoot, job.id, {
       status: execution.exitStatus === 0 ? "completed" : "failed", threadId: execution.threadId ?? null,
-      turnId: execution.turnId ?? null, result: payload, rendered: execution.rendered, summary: execution.summary,
+      turnId: execution.turnId ?? null, result: payload, rendered: execution.rendered, summary: execution.summary, ...steeringFields(execution),
       ...sessionUsageFields(job.workspaceRoot, job.id, execution.threadId ?? null, execution.usage ?? payload?.usage ?? null),
       ...(execution.error ? { errorCode: execution.error.error ?? execution.error.code, errorMessage: execution.error.message, retryAfter: execution.error.retryAfter } : {})
     });
