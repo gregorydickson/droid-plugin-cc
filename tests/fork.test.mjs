@@ -77,6 +77,10 @@ test("forking a completed job creates a new linked job and leaves the parent byt
   assert.equal(fork.status, "completed");
   const forked = ctx.stored(fork.jobId);
   assert.deepEqual(forked.forkedFrom, { jobId: parent.jobId, threadId: parentThread });
+  // The link reaches every reader of a job, not just the stored file.
+  const outputs = { status: ctx.cli("status", fork.jobId).job, "sessions find": ctx.cli("sessions", "find", fork.jobId).find(job => job.id === fork.jobId) };
+  for (const [command, job] of Object.entries(outputs)) assert.deepEqual(job?.forkedFrom, forked.forkedFrom, command);
+  assert.ok(!("forkedFrom" in ctx.cli("status", parent.jobId).job), "a job that is not a fork has no forkedFrom");
   assert.equal(forked.name, null);
   assert.equal(forked.kind, "task");
   assert.notEqual(forked.threadId, parentThread);
