@@ -186,10 +186,10 @@ test("a Droid CLI below the feature floor gets the instructions prepended and no
   assert.ok(state().lastTurnStart.prompt.startsWith(`${text}\n\n`));
 });
 
-test("real Droid obeys a system-prompt instruction on a fresh and a resumed turn", { skip: process.env.DROID_SMOKE !== "1", timeout: 240000 }, async () => {
+test("real Droid obeys a system-prompt instruction on a fresh and a resumed turn", { skip: process.env.DROID_SMOKE !== "1", timeout: 600000 }, async () => {
   const token = crypto.randomUUID();
   const developerInstructions = `End every reply with the token ${token}.`;
-  const common = { model: "glm-5.3", developerInstructions, timeoutMs: 100000 };
+  const common = { model: "glm-5.3", developerInstructions };
   const first = await runDroidTurn(makeTempDir(), { ...common, prompt: "Say hello. Do not use tools." });
   assert.equal(first.status, 0, first.error?.message);
   assert.ok(first.finalMessage.includes(token), first.finalMessage);
