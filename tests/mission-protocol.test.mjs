@@ -15,7 +15,13 @@ import { isDroidBinary, withDescendants, missionProcesses } from "./mission-owne
 // against saved reports without starting a mission.
 const REPLAY = process.env.DROID_MISSION_REPLAY;
 const REPORT = process.env.DROID_MISSION_REPORT;
-const gate = { skip: process.env.DROID_SMOKE_MISSION !== "1" && !REPLAY, timeout: 600000 };
+// A mission is stuck when nothing it owns has written for STALL_MS: a GLM mission runs its auto-injected
+// validators as further workers, so its length varies run to run while its quiet spells stay short
+// (docs/missions.md). MISSION_CEILING_MS only stops a mission that keeps writing without finishing.
+const STALL_MS = 180000;
+const MISSION_CEILING_MS = 1500000;
+const AFTER_CANCEL_MS = 10000;
+const gate = { skip: process.env.DROID_SMOKE_MISSION !== "1" && !REPLAY, timeout: MISSION_CEILING_MS + 6 * AFTER_CANCEL_MS };
 const DOC = new URL("../docs/missions.md", import.meta.url);
 const GOAL = "Create hello.txt containing the word hi, then stop.";
 // The orchestrator must write the mission's own files before StartMissionRun can spawn a worker, so the
@@ -23,9 +29,7 @@ const GOAL = "Create hello.txt containing the word hi, then stop.";
 const CANCEL_GOAL = "Run this as a mission with exactly one feature, implemented by exactly one worker. "
   + "You may write the mission's planning files, but you must not run the sleep or create hello.txt yourself. "
   + "The worker must first run the shell command `sleep 600`, then create hello.txt containing the word hi.";
-const RUN_LIMIT_MS = 540000;
 const SAMPLE_MS = 2000;
-const AFTER_CANCEL_MS = 10000;
 const FACTORY_HOME = path.join(process.env.FACTORY_HOME_OVERRIDE ?? os.homedir(), ".factory");
 const observed = {};
 
@@ -61,9 +65,24 @@ function workerProcesses(lineage, rootPid) {
   return lineage.filter(proc => workers.has(proc.pid));
 }
 
+const sessionsDir = cwd => path.join(FACTORY_HOME, "sessions", cwd.replace(/[/\\]/g, "-"));
+
+// The newest write to anything the mission keeps on disk: every session log for its cwd (orchestrator,
+// workers, validators and their subagents) and the mission's own directory.
+function lastMissionWriteMs(cwd, sessionId) {
+  const dirs = [sessionsDir(cwd), ...(sessionId ? [path.join(FACTORY_HOME, "missions", sessionId)] : [])];
+  let latest = 0;
+  for (const dir of dirs) {
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch { continue; }
+    for (const name of names) { try { latest = Math.max(latest, fs.statSync(path.join(dir, name)).mtimeMs); } catch { /* removed */ } }
+  }
+  return latest;
+}
+
 // Session files Droid wrote for this cwd, with each one's mission role.
 function missionSessions(cwd) {
-  const dir = path.join(FACTORY_HOME, "sessions", cwd.replace(/[/\\]/g, "-"));
+  const dir = sessionsDir(cwd);
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir).filter(name => name.endsWith(".settings.json")).map(name => {
     const settings = JSON.parse(fs.readFileSync(path.join(dir, name), "utf8"));
@@ -93,9 +112,9 @@ function runMission(format, { goal = GOAL, cancel = false } = {}) {
   const started = Date.now();
   const child = spawn("droid", args, { cwd, env: process.env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
   const record = { format, args, cwd, events: [], nonJson: [], stderr: "", exitCode: null, signal: null,
-    timedOut: false, helloTxt: null, sessionId: null, lineage: [], sessions: [], cancel: null };
+    timedOut: false, stalled: false, helloTxt: null, sessionId: null, lineage: [], sessions: [], cancel: null };
   const lineage = new Map();
-  let exited = false, cancelled = false;
+  let exited = false, cancelled = false, lastActivityMs = started;
   const sample = () => {
     for (const proc of missionProcesses(snapshot(), { rootPid: child.pid, baseline, sessionId: record.sessionId, cwd })) {
       const seen = lineage.get(proc.pid) ?? { ...proc, inExecGroup: proc.pgid === child.pid, firstSeenMs: Date.now() - started };
@@ -107,17 +126,21 @@ function runMission(format, { goal = GOAL, cancel = false } = {}) {
   const workerSessions = () => missionSessions(cwd).filter(session => session.sessionId !== record.sessionId && session.role !== "orchestrator");
   // The cancel waits for a live Droid worker process: a session file can outlive its worker.
   const droidWorkers = () => workerProcesses([...lineage.values()], child.pid).filter(isDroidBinary);
+  const stop = () => { record.timedOut = true; killGroup("SIGKILL"); };
   const sampler = setInterval(() => {
     sample();
+    lastActivityMs = Math.max(lastActivityMs, lastMissionWriteMs(cwd, record.sessionId));
+    if (!exited && Date.now() - lastActivityMs > STALL_MS) { record.stalled = true; stop(); }
     if (!cancel || cancelled || exited || droidWorkers().length === 0) return;
     cancelled = true;
     record.cancel = { sentAtMs: Date.now() - started, sentAtEpochMs: Date.now(), exitedBeforeCancel: false,
       workersAtCancel: workerProcesses([...lineage.values()], child.pid).map(proc => proc.pid), sessionsAtCancel: missionSessions(cwd) };
     killGroup("SIGTERM");
   }, SAMPLE_MS);
-  const limit = setTimeout(() => { record.timedOut = true; killGroup("SIGKILL"); }, RUN_LIMIT_MS);
+  const limit = setTimeout(stop, MISSION_CEILING_MS);
   child.stderr.on("data", data => { record.stderr = (record.stderr + data).slice(-16384); });
   createInterface({ input: child.stdout }).on("line", line => {
+    lastActivityMs = Date.now();
     if (!line.trim()) return;
     let event;
     try { event = JSON.parse(line); } catch { record.nonJson.push(line.slice(0, 500)); return; }
@@ -162,7 +185,7 @@ async function observe(name, format, options) {
 const eventsOf = record => record.events.map(event => event.name);
 
 function partial(record) {
-  return `exit=${record.exitCode} signal=${record.signal} timedOut=${record.timedOut} events=${eventsOf(record).join(",")} stderr=${record.stderr.slice(-2000)}`;
+  return `exit=${record.exitCode} signal=${record.signal} timedOut=${record.timedOut} stalled=${record.stalled ?? false} events=${eventsOf(record).join(",")} stderr=${record.stderr.slice(-2000)}`;
 }
 
 // The last two non-empty lines of docs/missions.md are the recorded findings.

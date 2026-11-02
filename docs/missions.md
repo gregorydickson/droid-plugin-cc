@@ -44,6 +44,14 @@ Event types seen, in order of first appearance:
 
 The orchestrator ignored its "do not implement code yourself" instruction and created `hello.txt` with one tool call, so this run started no workers. The test therefore shows that `completion` ends a mission the orchestrator finishes alone. It does not show how many `completion` events a mission emits once workers run.
 
+### Mission length and the stall limit
+
+On 2026-11-02, `glm-5.3` ran the same goal as a full mission rather than doing it alone. The orchestrator loaded its skills, called `ProposeMission`, wrote the mission files with `Create`, and called `StartMissionRun` twice. Droid's `progress_log.jsonl` shows one worker creating `hello.txt` and committing it, then the auto-injected `scrutiny-validator` and `user-testing-validator`. Each of those ran as a further `glm-5.3` worker and spawned a review subagent with `Task`. The run exited 0 with `completion` after 441 seconds. An earlier run on the same goal was killed at the test's former 540-second limit while it was still emitting `tool_call` events. `gpt-6.1-sol` finished the same goal alone, with no workers.
+
+Every session in that run kept writing. Across all session logs for the mission's cwd plus the mission's `progress_log.jsonl` and `worker-transcripts.jsonl`, the longest quiet spell was about 37 seconds. The orchestrator's stdout, by contrast, was silent for about 150 seconds during each `StartMissionRun`. Nothing looped and nothing waited on a permission prompt. The length comes from Droid's validator stages at `glm-5.3` latency, not from the plugin's arguments: droid 1.1.0 has no flag that skips the validators, and the test runs droid directly with the plugin's mission argv.
+
+So the test no longer stops a mission at a fixed length. It stops a mission as stalled when nothing the mission owns has been written for 180 seconds: no stdout line, no session log for its cwd, and no file in `~/.factory/missions/<orchestrator-session-id>/`. A 25-minute ceiling stops only a mission that keeps writing without finishing. The detector was checked offline against fake droids. A silent one was stopped as stalled. One whose stdout stayed quiet for 30 seconds while it kept writing its session log ran to completion. With activity read from stdout alone, that second one was wrongly stopped as stalled.
+
 In the cancel run below (also `stream-json`), the orchestrator wrote its mission files with `Create`, then called `StartMissionRun`. No `completion` arrived before the SIGTERM at about 182 seconds.
 
 ## Worker lineage
