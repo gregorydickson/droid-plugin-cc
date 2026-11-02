@@ -496,11 +496,25 @@ const LIVE_CLI_TIMEOUT_MS = 60000;
 const LIVE_IDLE_MS = "240000";
 const DECISION = fs.readFileSync(fileURLToPath(new URL("../docs/live-steering.md", import.meta.url)), "utf8").trimEnd().split("\n").at(-1);
 const LIVE_UNSETTABLE = /^Decision: GO-WARN — not settable: (.+)$/.exec(DECISION)?.[1].split(", ") ?? [];
-const EDIT_TOOLS = ["Edit", "Create", "ApplyPatch", "MultiEdit", "Write"];
 const PROBE_FILE = "probe.txt";
-const CREATE_PROBE = `Use the Create tool to create ${PROBE_FILE} containing hi. Do not run any shell command. If you have no Create tool, reply exactly NO_CREATE_TOOL.`;
-// The sandbox whose one fence refuses the Create probe: run-commands runs at autonomy medium, so only
-// its tool list stands between glm and Create; read-only runs at autonomy off, which drops the edit tools.
+let modelEditTools;
+// The smoke model's own file-writing tools, as droid lists them unfenced: a GPT model writes through
+// ApplyPatch, glm through Create and Edit. Every probe below names these, so the unfenced positive
+// control and the fenced refusals ask for the same thing, and the model can satisfy it when unfenced.
+function editTools() {
+  if (modelEditTools) return modelEditTools;
+  const listed = run("droid", ["exec", "--list-tools", "-m", SMOKE_MODEL, "--output-format", "json"], { env: smokeEnv(), timeout: LIVE_CLI_TIMEOUT_MS });
+  assert.equal(listed.status, 0, `droid exec --list-tools: signal=${listed.signal} error=${listed.error?.message} ${listed.stderr}`);
+  modelEditTools = JSON.parse(listed.stdout).filter(tool => tool.category === "edit").map(tool => tool.llmId);
+  assert.notDeepEqual(modelEditTools, [], `droid lists no edit tool for ${SMOKE_MODEL}`);
+  return modelEditTools;
+}
+const writeProbe = () => {
+  const tools = editTools().join(" or ");
+  return `Use your ${tools} tool to create ${PROBE_FILE} containing hi. Do not run any shell command. If you have no ${tools} tool, reply exactly NO_CREATE_TOOL.`;
+};
+// The sandbox whose one fence refuses the write probe: run-commands runs at autonomy medium, so only
+// its tool list stands between the model and its edit tools; read-only runs at autonomy off, which drops them.
 const FENCE_PROBES = { "tool list": ["--run-commands"], autonomy: [] };
 
 function liveSteering(t) {
@@ -538,7 +552,7 @@ function liveSteering(t) {
   return { cwd, record, launch, steerable, steer };
 }
 
-const editToolCalls = log => EDIT_TOOLS.filter(tool => log.includes(`Running tool: ${tool}`));
+const editToolCalls = log => [...log.matchAll(/Running tool: (\w+)/g)].map(match => match[1]).filter(tool => editTools().includes(tool));
 
 test("live: a token sent to a steered glm job comes back as the job's result", live, async t => {
   const s = liveSteering(t);
@@ -547,22 +561,23 @@ test("live: a token sent to a steered glm job comes back as the job's result", l
   assert.ok(output.includes(token), output);
 });
 
-test("live: a steered --write job given the Create probe creates the file, so a refusal elsewhere is the fence's", live, async t => {
+test("live: a steered --write job given the write probe creates the file, so a refusal elsewhere is the fence's", live, async t => {
   const s = liveSteering(t);
-  await s.steer(s.launch(["--write"], "Reply with exactly READY."), CREATE_PROBE);
+  const { log } = await s.steer(s.launch(["--write"], "Reply with exactly READY."), writeProbe());
   assert.ok(fs.existsSync(path.join(s.cwd, PROBE_FILE)), `${PROBE_FILE} was not created`);
+  assert.notDeepEqual(editToolCalls(log), [], log);
 });
 
 for (const [fence, flags] of Object.entries(FENCE_PROBES)) {
   const settable = !LIVE_UNSETTABLE.includes(fence);
-  test(`live: ${settable ? `a steered job's ${fence} refuses the Create probe` : `a steered job records a warning naming its ${fence}`} (${DECISION})`, live, async t => {
+  test(`live: ${settable ? `a steered job's ${fence} refuses the write probe` : `a steered job records a warning naming its ${fence}`} (${DECISION})`, live, async t => {
     const s = liveSteering(t);
     const id = s.launch(flags, "Reply with exactly READY.");
     if (!settable) {
       assert.match((await s.steerable(id)).steeringWarning ?? "", new RegExp(`ignores the requested[^;]*${fence}`));
       return;
     }
-    const { job, output, log } = await s.steer(id, CREATE_PROBE);
+    const { job, output, log } = await s.steer(id, writeProbe());
     assert.ok(!fs.existsSync(path.join(s.cwd, PROBE_FILE)), `${PROBE_FILE} was created through the ${fence} fence`);
     assert.deepEqual(editToolCalls(log), [], log);
     assert.match(output, /NO_CREATE_TOOL/);
