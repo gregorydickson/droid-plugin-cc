@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { smokeEnv } from "./helpers.mjs";
+import { run, smokeEnv } from "./helpers.mjs";
 
 const AUTH_NAMES = ["auth.v2.file", "auth.v2.key", "auth.v2.loginkeychain"];
 const realFactory = path.join(os.homedir(), ".factory");
@@ -46,4 +46,17 @@ test("smokeEnv({ fenced }) throws when no Factory login exists", () => {
   } finally {
     process.env.HOME = savedHome;
   }
+});
+
+// The child traps SIGTERM and exits 0, as the companion does while a turn runs: a timed-out spawn
+// must still fail, because spawnSync has already discarded the child's stdout.
+const SIGTERM_TO_EXIT_ZERO = "process.on('SIGTERM', () => process.exit(0)); console.log('started'); setInterval(() => {}, 1000);";
+
+test("run throws when a spawn outlives its timeout, even if the child then exits 0", () => {
+  assert.throws(() => run("node", ["-e", SIGTERM_TO_EXIT_ZERO], { timeout: 500 }), /timed out after 500ms[^]*output was discarded/);
+});
+
+test("run returns the result of a spawn that finishes inside its timeout", () => {
+  const result = run("node", ["-e", "console.log('done')"], { timeout: 60000 });
+  assert.deepEqual([result.status, result.stdout.trim()], [0, "done"]);
 });

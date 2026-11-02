@@ -13,9 +13,16 @@ export function writeExecutable(filePath, source) {
   fs.writeFileSync(filePath, source.replace("#!/usr/bin/env node", `#!${process.execPath}`), { encoding: "utf8", mode: 0o755 });
 }
 
+// A hang guard, not a speed budget: under a loaded machine (the full suite beside live missions) a
+// healthy CLI call can take many times its idle duration, and only a genuine hang should reach this.
+export const RUN_HANG_GUARD_MS = 120000;
+
+// spawnSync closes a timed-out child's pipes, so its stdout is lost, and a child that handles
+// SIGTERM can still exit 0. A timed-out spawn is therefore never returned as a result.
 export function run(command, args, options = {}) {
-  return spawnSync(command === "node" ? process.execPath : command, args, {
-    timeout: options.timeout ?? 15000,
+  const timeout = options.timeout ?? RUN_HANG_GUARD_MS;
+  const result = spawnSync(command === "node" ? process.execPath : command, args, {
+    timeout,
     cwd: options.cwd,
     env: options.env,
     encoding: "utf8",
@@ -23,6 +30,10 @@ export function run(command, args, options = {}) {
     shell: options.shell ?? (process.platform === "win32" && !path.isAbsolute(command)),
     windowsHide: true
   });
+  if (result.error?.code === "ETIMEDOUT") {
+    throw new Error(`${command} ${args.join(" ")} timed out after ${timeout}ms (exit=${result.status} signal=${result.signal}); its output was discarded`);
+  }
+  return result;
 }
 
 export function initGitRepo(cwd) {
