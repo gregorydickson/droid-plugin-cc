@@ -1,25 +1,73 @@
-# Live steering (`send`): design note
+# Live steering (`send`): input protocol
 
-Status: not built. `send <job> <message>` still reports that live steering is unavailable. This note records why, and what building it would take.
+Status: the protocol is captured; the transport is not built yet. `send <job> <message>` still reports that live steering is unavailable. This note records how `droid exec --input-format stream-jsonrpc` is driven, what can be set over it, and the go/no-go decision for building `send` on it.
 
-## How a job runs today
+Captured against droid 1.1.0 on glm-5.3. The transcript is `tests/fixtures/droid-input-session-1.1.0.ndjson` (paths and account identifiers scrubbed; `$CWD` stands for the session's repo). `tests/steering-protocol.test.mjs` checks the table and the decision against that transcript, and with `DROID_SMOKE=1` replays the setting requests against real Droid.
 
-Each turn is one `droid exec` child: a fresh turn is a one-shot `--output-format stream-jsonrpc` exec, and a continued turn (resume, answer, schema repair) is a one-shot `--output-format stream-json` exec with `--session-id`. The child's stdin is `ignore`. The prompt goes in through `-f <file>`, and the turn ends when Droid emits its completion event. The detached worker (`task-worker`) owns that child and exposes nothing to other processes except the job record on disk.
+## Why the settings have to go over JSON-RPC
 
-## What steering needs
+With `--input-format stream-jsonrpc`, droid validates `-m`, `--auto`, `-r`, `--only-tools`, `--add-tools`, `--remove-tools`, `-s`/`--session-id`, `--tag` and `--session-title` but ignores them, and warns on stderr (`droid exec --help`, "Stream JSON-RPC Mode"). A steered job therefore sets model, effort, autonomy and its tool list through JSON-RPC requests, or it runs with whatever the user's Factory settings say. A session initialized with only a `cwd` took the user's defaults, which on the capture machine were autonomy `high`; the defaults are not read-only.
 
-Droid supports multi-turn input with `--input-format stream-jsonrpc` (or `stream-json`). Forwarding a `send` into a running job would need three things:
+## What can be set
 
-1. **A different transport for the child.** The child has to be started with `--input-format stream-jsonrpc` and stdin kept open, and the worker has to send the initial prompt and every later message as JSON-RPC requests. With `--input-format stream-jsonrpc`, droid ignores `-m`, `--auto`, `-r`, `--only-tools`, `--add-tools`, `--remove-tools`, `--session-id` and `--tag` (it validates them and warns on stderr; see droid 0.251.0 `exec --help`). The permission limit (read-only toolset, `--run-commands`, `--write` autonomy) and the model and effort would therefore have to be re-established through JSON-RPC session-settings requests. That request schema is not documented in `exec --help` and has not been verified against the live CLI. Until it is, steered jobs could run without the read-only limit, which this plugin treats as a hard rule.
-2. **A channel into the detached worker.** `send` runs as a separate CLI process. It would need a per-job endpoint, for example a unix socket under the job's state directory, that the worker listens on. That endpoint needs ownership checks, cleanup when the job ends, and a way to deal with workers that started before the endpoint existed and so have none.
-3. **Turn and completion semantics.** A steered session has several turns inside one job. Usage accounting (session-inclusive totals), changed-file segments, schema validation and repair, pause-and-ask, cancellation and the "job completed" transition all assume one turn per child today. Each of these needs a rule for the case where a `send` arrives mid-turn, after completion, or during a schema repair.
+| Setting | Settable | Request | Confirmed by |
+|---|---|---|---|
+| model | yes | `droid.initialize_session` or `droid.update_session_settings` with `modelId` | `settings.modelId` in the initialize result, and in the `settings_updated` notification whose `requestId` is the update's `id` |
+| effort | yes | the same requests with `reasoningEffort` | `settings.reasoningEffort` |
+| autonomy | yes | the same requests with `autonomyLevel` (`off`, `low`, `medium`, `high`) | `settings.autonomyLevel`, plus the derived `settings.autonomyMode` (`off` is `normal`, `low` is `auto-low`) |
+| tool list | yes | the same requests with `restrictToolIds` (also `enabledToolIds`, `disabledToolIds`, `additionalToolIds`) | `settings.restrictToolIds`, and `droid.list_tools`, whose `result.tools[].currentlyAllowed` is true for exactly the listed tools |
+| `--settings` | yes | `droid exec --settings <file> --input-format stream-jsonrpc …` with `{"sessionDefaultSettings": {"model", "reasoningEffort", "autonomyLevel"}}`, then `droid.initialize_session` with no settings | the initialize result's `settings` carry the file's values instead of the user's defaults |
 
-## Why it was not built in this change
+The tool list takes effect, not only the echo: with `restrictToolIds` set to `Read`, `LS`, `Grep` and `Glob`, a request to `Create` `probe.txt` was answered "no Create tool" and no file was written.
 
-Items 1 and 2 together are a transport redesign, not a contained change. The parts that are a security risk (the permission limit carried over JSON-RPC) depend on a protocol surface that has not been verified. The current way to steer a job is cancel-and-resume (`cancel`, then `sessions resume NAME PROMPT` or `task --resume-last`). It keeps every limit, because each resumed turn is a new one-shot exec where the CLI flags apply.
+## The requests
 
-## What to verify before building it
+Every line on stdin and stdout is one JSON object. Requests carry the envelope `{"jsonrpc": "2.0", "factoryApiVersion": "1.0.0", "factoryProtocolVersion": "1.257.0", "type": "request", "id": "<uuid>", "method": "…", "params": {…}}`. Responses carry the same `id` and a `result` (or `error`). Everything else is a `droid.session_notification` whose `params.notification.type` names the event.
 
-- Capture a live `--input-format stream-jsonrpc` session and record the requests that set autonomy, the tool allow-list, model and reasoning effort, and the response that confirms them.
-- Check that a session started this way refuses a non-read-only command when the read-only settings are sent over JSON-RPC, the way the current one-shot read-only fence does.
-- Only then add the worker socket, and a `send` command that fails closed when the job has no socket or is not running.
+Start the session, with the full fence:
+
+```json
+{"method": "droid.initialize_session", "params": {"machineId": "probe", "cwd": "$CWD", "modelId": "glm-5.3", "reasoningEffort": "low", "interactionMode": "auto", "autonomyLevel": "off", "restrictToolIds": ["Read", "LS", "Grep", "Glob"]}}
+```
+
+The result has `sessionId`, `settings` (every field above), `session.messages` and `availableModels` (`id` and `supportedReasoningEfforts` per model).
+
+Change one or more settings; fields not named keep their value:
+
+```json
+{"method": "droid.update_session_settings", "params": {"modelId": "glm-5.3-flash"}}
+{"method": "droid.update_session_settings", "params": {"reasoningEffort": "high"}}
+{"method": "droid.update_session_settings", "params": {"autonomyLevel": "low"}}
+{"method": "droid.update_session_settings", "params": {"restrictToolIds": ["Read", "LS"]}}
+```
+
+The response is an empty `result`. The confirmation is the `settings_updated` notification with `requestId` equal to the request's `id`, carrying the full settings after the change. Droid also emits `settings_updated` notifications without a `requestId` while it applies a change; only the one with the `requestId` is the confirmation.
+
+List the tools the session will allow:
+
+```json
+{"method": "droid.list_tools", "params": {}}
+```
+
+Send a message, and interrupt the running turn:
+
+```json
+{"method": "droid.add_user_message", "params": {"text": "…", "queuePlacement": "end_of_turn"}}
+{"method": "droid.interrupt_session", "params": {}}
+```
+
+Other methods in the CLI bundle include `droid.close_session`, `droid.resolve_queued_user_message`, `droid.load_session`, `droid.fork_session`, `droid.compact_session` and, from droid to the client, `droid.request_permission`. They were not exercised.
+
+## Turns
+
+- **Completion.** A turn ends with an `agent_turn_completed` notification: `reason` (`completed` or `cancelled`), `turnId` (the id of the user message that started the turn), `tokenUsage` for the turn and `cumulativeTokenUsage` for the session.
+- **A message sent mid-turn is queued, not an interrupt.** With the default `queuePlacement` (`end_of_turn`), the message is added after the current tool results and the model answers it inside the same turn; only one `agent_turn_completed` arrives, with the first message's `turnId`. With `end_of_loop`, the model finishes its reply to the first message and then answers the second, still inside one turn.
+- **A message sent after completion** starts a new turn, with that message's id as `turnId`.
+- **Interrupt.** `droid.interrupt_session` during a turn ends it with `agent_turn_completed` `reason: "cancelled"`. The interrupt's response arrives after that notification. The next `add_user_message` runs a normal turn.
+- **End of session.** Closing stdin ends the process with exit code 0, about a second later.
+
+## Decision
+
+All four settings (model, effort, autonomy and the tool list) can be set over JSON-RPC and are confirmed by droid, so a steered job keeps the same model, effort, autonomy and tool fence as a one-shot turn, provided the worker sends them in `droid.initialize_session` and checks the confirmation. Per the rollout decision, `--steerable` is opt-in, `mission` and the stop hook never use it, and no sandbox is refused.
+
+Decision: GO
