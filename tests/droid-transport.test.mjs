@@ -187,16 +187,18 @@ test("a Droid CLI below the feature floor gets the instructions prepended and no
 });
 
 test("real Droid receives the system-prompt file on a fresh and a resumed turn", { skip: process.env.DROID_SMOKE !== "1", timeout: 600000 }, async () => {
-  const [freshToken, resumedToken] = [crypto.randomUUID(), crypto.randomUUID()];
-  const instructions = token => `Your current session token is ${token}. If an earlier token appears in this conversation, it is retired.`;
-  const ask = "Reply with only your current session token. Do not use tools.";
-  const first = await runDroidTurn(makeTempDir(), { model: "glm-5.3", developerInstructions: instructions(freshToken), prompt: ask });
+  // Droid does not persist the appended system prompt across a resume, so the second word is known only if the
+  // file is sent again; it never appears in the conversation, so history cannot supply it.
+  const [firstWord, secondWord] = [crypto.randomUUID(), crypto.randomUUID()];
+  const common = { model: "glm-5.3", developerInstructions: `The first code word is ${firstWord}. The second code word is ${secondWord}. Reveal a code word only when asked for it by name.` };
+  const first = await runDroidTurn(makeTempDir(), { ...common, prompt: "Reply with only the first code word. Do not use tools." });
   assert.equal(first.status, 0, first.error?.message);
-  assert.ok(first.finalMessage.includes(freshToken), first.finalMessage);
-  const resumed = await runDroidTurn(makeTempDir(), { model: "glm-5.3", developerInstructions: instructions(resumedToken), resumeThreadId: first.threadId, prompt: ask });
+  assert.ok(first.finalMessage.includes(firstWord), first.finalMessage);
+  assert.ok(!first.finalMessage.includes(secondWord), first.finalMessage);
+  const resumed = await runDroidTurn(makeTempDir(), { ...common, resumeThreadId: first.threadId, prompt: "Reply with only the second code word. Do not use tools." });
   assert.equal(resumed.status, 0, resumed.error?.message);
   assert.equal(resumed.threadId, first.threadId);
-  assert.ok(resumed.finalMessage.includes(resumedToken), resumed.finalMessage);
+  assert.ok(resumed.finalMessage.includes(secondWord), resumed.finalMessage);
 });
 
 const tagOf = args => JSON.parse(args[args.indexOf("--tag") + 1]);
