@@ -169,6 +169,27 @@ test("a background mission reports label mission in status and its final message
   assert.deepEqual(JSON.parse(flagValue(args, "--tag")).metadata, { jobId: launched.jobId, kind: "mission" });
 });
 
+test("mission's worker and validator flags reach droid under droid's own flag names", t => {
+  const fixture = missionCli(t);
+  fixture.cli("mission", "--model", "main-model", "--effort", "high", "--worker-model", "w-model", "--worker-effort", "low",
+    "--validator-model", "v-model", "--validator-effort", "medium", GOAL);
+  const args = fixture.lastArgs();
+  assert.deepEqual(Object.fromEntries(["-m", "-r", ...MISSION_FLAGS.slice(1)].map(flag => [flag, flagValue(args, flag)])), {
+    "-m": "main-model", "-r": "high", "--worker-model": "w-model", "--validator-model": "v-model",
+    "--worker-reasoning-effort": "low", "--validator-reasoning-effort": "medium"
+  });
+});
+
+for (const flag of ["--worker-effort", "--validator-effort"]) {
+  test(`mission refuses an unsupported ${flag} before droid runs`, t => {
+    const fixture = missionCli(t);
+    const result = fixture.invoke("mission", flag, "loud", GOAL);
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, /^Unsupported reasoning effort "loud"\. Use one of: /);
+    assert.ok(!fs.existsSync(fixture.statePath), "no droid exec ran");
+  });
+}
+
 test("cancel on a running mission marks it cancelled", { timeout: 20000 }, async t => {
   const fixture = missionCli(t, { behavior: "stubborn-task" });
   const launched = fixture.cli("mission", "--background", GOAL);
