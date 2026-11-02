@@ -103,6 +103,8 @@ const TOOL_FENCE_OPTIONS = ["run-commands", "mcp-tool", "no-web", "no-subagents"
 const WORKER_PATH_OPTIONS = ["output-schema", "result-file", "notify-socket", "mcp-config", "brief", "instructions", "preread", "worktree"];
 // Per-turn input: the resumed thread already holds the previous slice's brief and preread.
 const PER_TURN_WORKER_OPTIONS = ["brief", "preread"];
+// Transport choices for a fresh turn: a resumed or forked turn cannot reopen a steered session, so they never replay.
+const FRESH_TURN_ONLY_OPTIONS = ["steerable"];
 export { MODEL_RESOLVING_COMMANDS };
 // Worker flags a mission refuses: it runs one unnamed, non-pausing turn at --auto high with droid's own toolset.
 const MISSION_REJECTED_VALUE_FLAGS = ["name", "fanout", "brief", "preread", "fork"];
@@ -1369,6 +1371,7 @@ async function resumedRequest(previous, options, { fork = false } = {}) {
   const explicit = absoluteWorkerArgs(options.overrideCwd ?? base.cwd, options);
   if (options.worktree) explicit.worktree = options.overrideCwd;
   if (!fork) for (const key of ["name", "persistent"]) if (explicit[key]) throw new Error(`--${key} cannot change on resume; the session keeps its name.`);
+  if (explicit.steerable) throw new Error("--steerable starts a fresh session; a resumed or forked turn runs one-shot.");
   const recorded = base.workerArgs;
   if (explicit.worktree && explicit.worktree !== (recorded?.worktree ?? null)) throw new Error("A resumed session keeps its original worktree.");
   // A fork is a new job: it takes a name only from its own --name and its model from the default chain.
@@ -1383,7 +1386,7 @@ async function resumedRequest(previous, options, { fork = false } = {}) {
     return { request: { ...base, resultFile: null, ...naming }, worker: { resultFile: null, ...naming } };
   }
   const inherited = Object.fromEntries(Object.entries(recorded).filter(([key, value]) =>
-    !PER_TURN_WORKER_OPTIONS.includes(key) && !(fork && key === "name") && (key !== "result-file" || value.includes("{jobId}"))));
+    !PER_TURN_WORKER_OPTIONS.includes(key) && !FRESH_TURN_ONLY_OPTIONS.includes(key) && !(fork && key === "name") && (key !== "result-file" || value.includes("{jobId}"))));
   const worker = await prepareWorkerOptions(base.cwd, { ...inherited, ...explicit });
   const { model, effort } = choice;
   const write = Boolean(inherited.write || explicit.write);
@@ -1409,6 +1412,8 @@ async function resumeSession(previous, prompt, options = {}) {
     changedFiles: options.answering ? previous.changedFiles : [], externalLock: null, finalization: null, terminalDelivery: null, pauseDelivery: null, changedFilesError: options.answering ? previous.changedFilesError : null,
     resumedFrom: options.answering ? previous.resumedFrom : previous.id, resumedTo: null,
     deliveryErrors: null, unlockError: null, usage: null, sessionUsage: null, startedAt: null, cancelledAt: null, cancelRequested: false,
+    // The steering socket belongs to the turn that opened it; an answer is the same job, so it keeps that job's warning.
+    socketPath: null, steeringWarning: options.answering ? previous.steeringWarning ?? null : null,
     structured: options.structured || options.answering || Boolean(resumed.worker.structured ?? previous.structured) };
   const request = { ...resumed.request, resumeLast: false, resumeThreadId: previous.threadId, prompt, jobId: job.id };
   job.request = request;

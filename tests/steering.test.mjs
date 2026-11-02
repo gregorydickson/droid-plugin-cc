@@ -432,6 +432,52 @@ test("a warning droid's transport reports is recorded on the finished job", { ti
   assert.ok(!c.withData(() => listJobs(c.cwd)).some(job => job.socketPath && fs.existsSync(job.socketPath)));
 });
 
+// ---- a continued turn of a steerable job ----
+
+const CONTINUATIONS = { resumed: id => ["sessions", "resume", id], forked: id => ["task", "--fork", id] };
+const oneShotExecs = c => c.state().threadRequests ?? [];
+const jobIds = c => new Set(c.withData(() => listJobs(c.cwd)).map(job => job.id));
+
+for (const [continuation, command] of Object.entries(CONTINUATIONS)) {
+  test(`a ${continuation} turn of a steerable job runs as an ordinary tagged one-shot turn and leaves the steering state behind`, { timeout: CLI_TIMEOUT_MS }, async t => {
+    const c = cliFixture(t, { decision: "GO-WARN" });
+    const { jobId } = c.launch();
+    await c.steerable(jobId);
+    assert.equal(c.invoke("send", jobId, "--end").status, 0);
+    const parent = await c.finished(jobId);
+    assert.equal(parent.status, "completed", parent.errorMessage);
+    assert.ok(parent.steerable && parent.socketPath && parent.steeringWarning, JSON.stringify(parent));
+    const execsBefore = oneShotExecs(c).length;
+    const idsBefore = jobIds(c);
+    const result = c.invoke(...command(jobId), "--json", "go on");
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+    const [childId] = [...jobIds(c)].filter(id => !idsBefore.has(id));
+    assert.ok(childId, `no ${continuation} job was created`);
+    assert.deepEqual(oneShotExecs(c).slice(execsBefore).map(request => JSON.parse(flagValue(request.args, "--tag"))),
+      [{ name: "droid-plugin-cc", metadata: { jobId: childId, kind: "task" } }]);
+    const child = c.job(childId);
+    assert.equal(child.steerable, false);
+    assert.equal(child.socketPath ?? null, null);
+    assert.equal(child.steeringWarning ?? null, null);
+  });
+}
+
+test("--steerable on a resumed or forked turn is refused before droid runs", { timeout: CLI_TIMEOUT_MS }, t => {
+  const c = cliFixture(t);
+  const plain = c.invoke("task", "--json", "plain");
+  assert.equal(plain.status, 0, plain.stderr + plain.stdout);
+  const [jobId] = jobIds(c);
+  for (const [continuation, command] of Object.entries(CONTINUATIONS)) {
+    const execsBefore = oneShotExecs(c);
+    const idsBefore = jobIds(c);
+    const result = c.invoke(...command(jobId), "--steerable", "--background", "go on");
+    assert.equal(result.status, 1, `${continuation}: ${result.stdout}`);
+    assert.equal(result.stderr.trim(), "--steerable starts a fresh session; a resumed or forked turn runs one-shot.", continuation);
+    assert.deepEqual(oneShotExecs(c), execsBefore, continuation);
+    assert.deepEqual(jobIds(c), idsBefore, continuation);
+  }
+});
+
 // ---- live: real droid on glm-5.3 (DROID_SMOKE=1, a Factory login on this machine) ----
 
 const live = { skip: process.env.DROID_SMOKE !== "1", timeout: 300000 };
