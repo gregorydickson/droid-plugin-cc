@@ -461,12 +461,13 @@ async function executeReviewRun(request) {
   });
   const focusText = request.focusText?.trim() ?? "";
   const reviewName = request.reviewName ?? "Review";
+  const tag = jobTag(request.jobId, request.kind ?? reviewJobKind(reviewName));
   if (reviewName === "Review") {
     validateNativeReviewRequest(target, focusText);
     const context = collectReviewContext(request.cwd, target);
     const result = await runDroidTurn(request.cwd, {
       ...request, sandbox: request.runCommands ? "run-commands" : "read-only",
-      tag: jobTag(request.jobId, request.kind ?? (request.reviewName === "Adversarial Review" ? "adversarial-review" : "review")),
+      tag,
       prompt: `Review code changes for correctness, regressions, security, and missing tests. Report actionable findings with file/line references, or explicitly say no material issues were found. Do not modify files.\nTarget: ${target.label}\n${context.collectionGuidance}\n${context.content}`
     });
     result.reviewText = result.finalMessage;
@@ -514,7 +515,7 @@ async function executeReviewRun(request) {
     ...request,
     prompt,
     model: request.model,
-    tag: jobTag(request.jobId, request.kind ?? (request.reviewName === "Adversarial Review" ? "adversarial-review" : "review")),
+    tag,
     sandbox: request.runCommands ? "run-commands" : "read-only",
     outputSchema: request.outputSchema ?? readOutputSchema(REVIEW_SCHEMA),
     onProgress: request.onProgress
@@ -669,9 +670,13 @@ async function executeMissionRun(request) {
   };
 }
 
+function reviewJobKind(reviewName) {
+  return reviewName === "Adversarial Review" ? "adversarial-review" : "review";
+}
+
 function buildReviewJobMetadata(reviewName, target) {
   return {
-    kind: reviewName === "Adversarial Review" ? "adversarial-review" : "review",
+    kind: reviewJobKind(reviewName),
     title: reviewName === "Review" ? "Droid Review" : `Droid ${reviewName}`,
     summary: `${reviewName} ${target.label}`
   };
