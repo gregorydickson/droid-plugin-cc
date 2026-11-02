@@ -2,8 +2,8 @@
 
 ## 0.2.0
 
-- Version floor: the Droid CLI 1.1.0 features (missions, `--fork`, `--tag`, `--append-system-prompt-file`, the widened read-only toolbox) need Droid CLI 1.1.0 or newer. `/droid:setup` reports the installed version, and each feature is gated on the CLI's version, so an older CLI keeps the 0.1.x behaviour.
-- `/droid:mission <goal>` runs a Droid mission (orchestrator, workers and validators) as a tracked background job at `--auto high`, with GLM-default worker and validator models; see `docs/missions.md`.
+- Version floor: Droid CLI 1.1.0. `mission`, `--fork`, `--spec` and `--steerable` refuse with `requires Droid CLI >= 1.1.0` on an older CLI. Only `--tag` and the system-prompt file fall back: the tag is dropped and the developer instructions go back into the user prompt. The widened read-only toolbox is not version-gated. `/droid:setup` reports the installed version.
+- `/droid:mission <goal>` runs a Droid mission (orchestrator, workers and validators) as a tracked background job at `--auto high`. There is no GLM default: `--worker-model` and `--validator-model` (and their efforts) fall back to the orchestrator's model and effort; see `docs/missions.md`.
 - Read-only jobs now get a wider toolbox: the web tools, `Skill`, `ToolSearch`, `TodoWrite` and the subagent tools join `Read,LS,Grep,Glob,Execute`. `--no-web` and `--no-subagents` drop those groups, and the stop-time review gate runs with `--no-web`. `--run-commands` and schema repair keep the narrow five.
 - Live steering decision: GO. `task --steerable --background` holds one `droid exec` child open on stdin, and `send JOB MESSAGE` (or `--file`, or `--end`) adds a user turn to it. Model, effort, autonomy and the tool list all go over JSON-RPC and are confirmed by droid, so a steered job keeps the same fence as a one-shot turn. `mission` and the stop hook never use it; `docs/live-steering.md` records the measurements.
 - `task --fork JOB|NAME` branches a new linked job from an existing job or named session.
@@ -11,8 +11,8 @@
 - Developer instructions go to the model through `--append-system-prompt-file` instead of the user prompt (not on schema-repair turns).
 - `task --spec` with `--spec-model` and `--spec-effort` maps to Droid spec mode.
 - `/droid:setup` runs `droid doctor` and reports login and host health.
-- `--tag` sends the job id and kind to Factory session metadata on tagged jobs.
-- `sessions find` finds tracked sessions by id, name, title or Droid session id.
+- The plugin tags every task, review, adversarial-review and mission job with its job id and kind in Factory session metadata (`--tag`). It is not a user option, and it is skipped for `--steerable` jobs and CLIs older than 1.1.0.
+- `sessions find` finds tracked jobs and sessions by id, name, title or Droid session id.
 
 ## 0.1.2
 
