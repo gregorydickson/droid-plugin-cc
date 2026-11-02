@@ -16,6 +16,9 @@ const table = {
   daemonWorker: proc(500, 1, `/home/u/.local/bin/droid exec -s ${SESSION}`),
   daemonNamedOnly: proc(501, 1, `node worker ${SESSION}`),
   detachedSiblingDroid: proc(450, 1, `/usr/local/bin/droid exec --cwd ${OTHER_CWD} --mission`),
+  leakedTaskWorker: proc(700, 1, "node task-worker.mjs"),
+  leakedMissionExec: proc(701, 700, `droid exec --cwd ${OTHER_CWD} --mission`),
+  leakedMissionWorker: proc(702, 701, "droid exec --input-format stream-jsonrpc --output-format stream-jsonrpc"),
   unrelated: proc(600, 1, "/usr/bin/vim")
 };
 const procs = Object.values(table);
@@ -30,8 +33,15 @@ test("mission ownership keeps the exec tree and daemon-spawned workers", () => {
 
 test("mission ownership never adopts a process under a sibling test file", () => {
   const owned = adopted();
-  for (const key of ["siblingTest", "siblingDroid", "siblingNamed", "detachedSiblingDroid"]) assert.ok(!owned.has(table[key].pid), key);
+  for (const key of ["siblingTest", "siblingDroid", "siblingNamed", "detachedSiblingDroid", "leakedMissionExec", "leakedMissionWorker"]) assert.ok(!owned.has(table[key].pid), key);
   assert.ok(!owned.has(table.unrelated.pid));
+});
+
+test("a cwd-less worker inherits the workspace of its nearest cwd-naming ancestor", () => {
+  const owned = adopted();
+  assert.ok(!owned.has(table.leakedMissionWorker.pid));
+  assert.ok(owned.has(table.execChild.pid));
+  assert.ok(owned.has(table.daemonWorker.pid));
 });
 
 test("mission ownership still skips baseline processes outside the exec tree", () => {
