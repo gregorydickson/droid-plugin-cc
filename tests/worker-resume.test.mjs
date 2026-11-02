@@ -8,7 +8,6 @@ import { buildEnv } from "./fake-droid-fixture.mjs";
 import { installWorkerDroid } from "./worker-droid-fixture.mjs";
 import { readStoredJob } from "../plugins/droid/scripts/lib/job-control.mjs";
 import { writeJobFile } from "../plugins/droid/scripts/lib/state.mjs";
-import { resolveRuntimeOptions } from "../plugins/droid/scripts/lib/runtime-options.mjs";
 
 const script = fileURLToPath(new URL("../plugins/droid/scripts/droid-companion.mjs", import.meta.url));
 const THREAD_FIELDS = ["cwd"];

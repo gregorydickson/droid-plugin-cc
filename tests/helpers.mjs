@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { spawnSync } from "node:child_process";
-import { after, afterEach } from "node:test";
 export function makeTempDir(prefix = "droid-plugin-test-") {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   return dir;
