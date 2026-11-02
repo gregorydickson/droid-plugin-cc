@@ -48,7 +48,7 @@ In the cancel run below (also `stream-json`), the orchestrator wrote its mission
 
 ## Worker lineage
 
-Cancel run goal: "Do not create or edit any file yourself. Start exactly one worker for this mission. The worker must first run the shell command `sleep 120`, then create hello.txt containing the word hi." The test sampled `ps -axo pid,ppid,pgid,command` every 2 seconds. It recorded the exec's descendants, any new process naming the mission session id, and any new `droid` or `factoryd` binary.
+Cancel run goal: "Run this as a mission with exactly one feature, implemented by exactly one worker. You may write the mission's planning files, but you must not run the sleep or create hello.txt yourself. The worker must first run the shell command `sleep 600`, then create hello.txt containing the word hi." The test sampled `ps -axo pid,ppid,pgid,command` every 2 seconds. It recorded the exec's descendants, any new process naming the mission session id, and any new `droid` or `factoryd` binary.
 
 | Process | Parent | Process group | Role |
 |:---|:---|:---|:---|
@@ -57,11 +57,13 @@ Cancel run goal: "Do not create or edit any file yourself. Start exactly one wor
 | `gt mcp`, `exocortex` and their children | orchestrator, and separately the worker | the exec's group | MCP servers that each Droid process starts. |
 | `caffeinate -i -w <droid pid>`, graphite `background` helpers | orchestrator, worker or MCP server | their own groups | Short-lived helpers that leave the group. Not workers. |
 
+The goal first used on 2026-11-01 began "Do not create or edit any file yourself." That contradicts the mission protocol, because the orchestrator must write the mission files before `StartMissionRun` can spawn a worker. On 2026-11-02, `gpt-6.1-sol` obeyed it and stopped without starting a worker: "Blocked: the mission runner requires setup files before launching a worker. Creating them would violate your instruction." The current goal forbids the orchestrator only the work itself.
+
 No `factoryd` process appeared, and no process outside the exec's tree named the mission session id. The worker's command line does not include the mission id. Its session is visible only through `~/.factory/sessions/<cwd-with-dashes>/<worker-session-id>.settings.json`. Droid also keeps the mission's plan under `~/.factory/missions/<orchestrator-session-id>/`: `state.json`, `features.json`, and `progress_log.jsonl`, which records `mission_run_started`, `worker_selected_feature` and `worker_started` with the `workerSessionId`.
 
 ## Cancel
 
-The test sent SIGTERM to the exec's process group 2 seconds after the worker process appeared, while the worker was running. The exec exited with status 143. Ten seconds later, neither the orchestrator nor any worker process was alive. The worker's session log had not been written more than 5 seconds after the signal. Signalling the exec's process group therefore stops the orchestrator and its workers. That is what the plugin's `terminateProcessTree` already does on POSIX.
+The test sends SIGTERM to the exec's process group at the first 2-second sample that sees a live worker `droid` process, and never before: a worker session file alone does not count, because it can outlive its process. A mission that exits without a worker process fails the test as inconclusive. On 2026-11-02 the signal went out about 110 seconds into the run on `glm-5.3` and about 126 seconds in on `gpt-6.1-sol`, both while the worker was running. In every run the exec exited with status 143. Ten seconds later, neither the orchestrator nor any worker process was alive. The worker's session log had not been written more than 5 seconds after the signal. Signalling the exec's process group therefore stops the orchestrator and its workers. That is what the plugin's `terminateProcessTree` already does on POSIX.
 
 The mission's own `state.json` still read `"state": "running"` after the kill. Nothing in Droid marks a killed mission as cancelled, so a reader of that file must not take `running` as proof that the mission is live.
 

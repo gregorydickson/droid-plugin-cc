@@ -18,12 +18,14 @@ const REPORT = process.env.DROID_MISSION_REPORT;
 const gate = { skip: process.env.DROID_SMOKE_MISSION !== "1" && !REPLAY, timeout: 600000 };
 const DOC = new URL("../docs/missions.md", import.meta.url);
 const GOAL = "Create hello.txt containing the word hi, then stop.";
-const CANCEL_GOAL = "Do not create or edit any file yourself. Start exactly one worker for this mission. "
-  + "The worker must first run the shell command `sleep 120`, then create hello.txt containing the word hi.";
+// The orchestrator must write the mission's own files before StartMissionRun can spawn a worker, so the
+// goal forbids it only the work itself; the worker's sleep keeps it alive past the first sample that sees it.
+const CANCEL_GOAL = "Run this as a mission with exactly one feature, implemented by exactly one worker. "
+  + "You may write the mission's planning files, but you must not run the sleep or create hello.txt yourself. "
+  + "The worker must first run the shell command `sleep 600`, then create hello.txt containing the word hi.";
 const RUN_LIMIT_MS = 540000;
 const SAMPLE_MS = 2000;
 const AFTER_CANCEL_MS = 10000;
-const CANCEL_FALLBACK_MS = 240000;
 const FACTORY_HOME = path.join(process.env.FACTORY_HOME_OVERRIDE ?? os.homedir(), ".factory");
 const observed = {};
 
@@ -103,10 +105,11 @@ function runMission(format, { goal = GOAL, cancel = false } = {}) {
   };
   const killGroup = signal => { try { process.kill(-child.pid, signal); } catch { /* group gone */ } };
   const workerSessions = () => missionSessions(cwd).filter(session => session.sessionId !== record.sessionId && session.role !== "orchestrator");
-  const workerStarted = () => workerProcesses([...lineage.values()], child.pid).length > 0 || workerSessions().length > 0;
+  // The cancel waits for a live Droid worker process: a session file can outlive its worker.
+  const droidWorkers = () => workerProcesses([...lineage.values()], child.pid).filter(isDroidBinary);
   const sampler = setInterval(() => {
     sample();
-    if (!cancel || cancelled || exited || !(workerStarted() || Date.now() - started > CANCEL_FALLBACK_MS)) return;
+    if (!cancel || cancelled || exited || droidWorkers().length === 0) return;
     cancelled = true;
     record.cancel = { sentAtMs: Date.now() - started, sentAtEpochMs: Date.now(), exitedBeforeCancel: false,
       workersAtCancel: workerProcesses([...lineage.values()], child.pid).map(proc => proc.pid), sessionsAtCancel: missionSessions(cwd) };
@@ -200,7 +203,7 @@ test("the completion event named in docs/missions.md is the last event before ex
 test("SIGTERM to the mission's process group leaves survivors iff the doc says orchestrator-only", gate, async () => {
   const record = await observe("cancel", "stream-json", { goal: CANCEL_GOAL, cancel: true });
   assert.equal(record.timedOut, false, partial(record));
-  assert.equal(record.cancel?.exitedBeforeCancel, false, `mission exited before it was cancelled: ${partial(record)}`);
+  assert.equal(record.cancel?.exitedBeforeCancel, false, `mission exited with no Droid worker process ever seen: ${partial(record)}`);
   assert.ok(record.lineage.some(proc => record.cancel.workersAtCancel.includes(proc.pid) && isDroidBinary(proc)),
     `no Droid worker process was running when SIGTERM was sent: ${JSON.stringify(record.lineage.map(proc => proc.command))}`);
   const { cancel } = readFindings();
