@@ -370,6 +370,20 @@ test("a steerable job whose jobs-dir socket path overflows listens in a private 
   assert.ok(!fs.existsSync(privateDir), `${privateDir} outlived its job`);
 });
 
+test("a steerable job whose private temp dir also overflows sun_path removes that dir when listen fails", { timeout: CLI_TIMEOUT_MS }, async t => {
+  const tmp = path.join(fs.mkdtempSync("/tmp/ds-"), "y".repeat(100));
+  fs.mkdirSync(tmp);
+  t.after(() => fs.rmSync(path.dirname(tmp), { recursive: true, force: true }));
+  const c = cliFixture(t, { data: LONG_DATA_ROOT(), env: { TMPDIR: tmp } });
+  const { jobId } = c.launch();
+  const record = await until(() => {
+    const current = c.job(jobId);
+    return current?.logFile && fs.existsSync(current.logFile) && /Steering socket failed/.test(fs.readFileSync(current.logFile, "utf8")) && current;
+  }, `${jobId}'s steering failure`);
+  assert.equal(record.socketPath, undefined);
+  assert.deepEqual(fs.readdirSync(tmp).filter(name => name.startsWith("droid-steer-")), []);
+});
+
 test("a running steerable job records the jobs-dir socket path the worker listens on", { timeout: CLI_TIMEOUT_MS }, async t => {
   // A short data root keeps the jobs-dir path inside sun_path; macOS's long TMPDIR would overflow it.
   const c = cliFixture(t, { data: fs.mkdtempSync("/tmp/ds-") });
