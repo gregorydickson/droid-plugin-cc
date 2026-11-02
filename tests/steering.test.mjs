@@ -35,6 +35,12 @@ async function untilSent(f, text) {
 
 const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
+/** True once `pid` has gone; an orphan's SIGKILL lands asynchronously, so one probe can still see it. */
+async function exits(pid, deadline = Date.now() + 5000) {
+  while (alive(pid) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
+  return !alive(pid);
+}
+
 /** Resolves with the session once its first turn's answer is reported. */
 function startAndAwaitFirstAnswer(f, options = {}) {
   let session;
@@ -127,6 +133,17 @@ test("end() kills a child that keeps running after its input closes", { timeout:
   const result = await session.done;
   assert.equal(result.status, 0, JSON.stringify(result.error));
   assert.ok(!alive(session.pid), `droid ${session.pid} still running`);
+});
+
+test("a session whose droid exits leaves none of droid's descendants running", { timeout: TEST_TIMEOUT_MS }, async () => {
+  const f = fixture("review-ok", { DROID_STEER_IDLE_MS: LONG_IDLE_MS, FAKE_DROID_INPUT: "orphan" });
+  const session = await startAndAwaitFirstAnswer(f);
+  const descendant = f.state().inputDescendantPid;
+  assert.ok(alive(descendant), `descendant ${descendant} never started`);
+  session.end();
+  const result = await session.done;
+  assert.equal(result.status, 0, JSON.stringify(result.error));
+  assert.ok(await exits(descendant), `descendant ${descendant} still running`);
 });
 
 test("cancelling a running steered turn kills the child and fails the job", { timeout: TEST_TIMEOUT_MS }, async () => {

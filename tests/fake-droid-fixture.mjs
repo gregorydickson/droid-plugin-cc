@@ -142,7 +142,8 @@ else finish();
 // it was given, minus any named in FAKE_DROID_IGNORE_SETTINGS. A message sent while a turn runs
 // is folded into that turn, as droid does, so each completion answers every message it saw.
 // FAKE_DROID_INPUT=exit quits on initialize without a completion; =permission asks the client
-// for a permission after initializing; =hold keeps running after stdin closes. FAKE_DROID_TURN_MS
+// for a permission after initializing; =hold keeps running after stdin closes; =orphan starts a
+// SIGTERM-ignoring descendant (state.inputDescendantPid) that outlives the session. FAKE_DROID_TURN_MS
 // sets how long a turn runs.
 function runInputSession() {
   for (const flag of ["--tag", "--only-tools", "--auto", "--add-tools", "-m", "-r", "-f", "--session-id"]) if (args.includes(flag)) {
@@ -190,6 +191,10 @@ function runInputSession() {
       const settings = Object.fromEntries(Object.entries(msg.params).filter(([key]) => !["cwd", "machineId"].includes(key) && !ignored.has(key)));
       send({ type: "response", id: msg.id, result: { sessionId, session: { messages: [] }, settings } });
       if (mode === "permission") send({ type: "request", id: "permission-1", method: "droid.request_permission", params: {} });
+      if (mode === "orphan") {
+        const descendant = require("node:child_process").spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: "ignore" });
+        update(state => { state.inputDescendantPid = descendant.pid; });
+      }
       return;
     }
     send({ type: "response", id: msg.id, result: {} });
