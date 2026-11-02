@@ -186,17 +186,17 @@ test("a Droid CLI below the feature floor gets the instructions prepended and no
   assert.ok(state().lastTurnStart.prompt.startsWith(`${text}\n\n`));
 });
 
-test("real Droid obeys a system-prompt instruction on a fresh and a resumed turn", { skip: process.env.DROID_SMOKE !== "1", timeout: 600000 }, async () => {
-  const token = crypto.randomUUID();
-  const developerInstructions = `End every reply with the token ${token}.`;
-  const common = { model: "glm-5.3", developerInstructions };
-  const first = await runDroidTurn(makeTempDir(), { ...common, prompt: "Say hello. Do not use tools." });
+test("real Droid receives the system-prompt file on a fresh and a resumed turn", { skip: process.env.DROID_SMOKE !== "1", timeout: 600000 }, async () => {
+  const [freshToken, resumedToken] = [crypto.randomUUID(), crypto.randomUUID()];
+  const instructions = token => `Your current session token is ${token}. If an earlier token appears in this conversation, it is retired.`;
+  const ask = "Reply with only your current session token. Do not use tools.";
+  const first = await runDroidTurn(makeTempDir(), { model: "glm-5.3", developerInstructions: instructions(freshToken), prompt: ask });
   assert.equal(first.status, 0, first.error?.message);
-  assert.ok(first.finalMessage.includes(token), first.finalMessage);
-  const resumed = await runDroidTurn(makeTempDir(), { ...common, resumeThreadId: first.threadId, prompt: "Say goodbye. Do not use tools." });
+  assert.ok(first.finalMessage.includes(freshToken), first.finalMessage);
+  const resumed = await runDroidTurn(makeTempDir(), { model: "glm-5.3", developerInstructions: instructions(resumedToken), resumeThreadId: first.threadId, prompt: ask });
   assert.equal(resumed.status, 0, resumed.error?.message);
   assert.equal(resumed.threadId, first.threadId);
-  assert.ok(resumed.finalMessage.includes(token), resumed.finalMessage);
+  assert.ok(resumed.finalMessage.includes(resumedToken), resumed.finalMessage);
 });
 
 const tagOf = args => JSON.parse(args[args.indexOf("--tag") + 1]);
