@@ -5,7 +5,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { interruptDroidTurn } from "./droid.mjs";
 import process from "node:process";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { withFileLockSync } from "./file-lock.mjs";
@@ -318,11 +318,16 @@ function updateActiveJob(job, update) {
 // macOS caps a unix socket path (sun_path) at 104 bytes.
 const MAX_SOCKET_PATH_BYTES = 100;
 
-/** `<jobs dir>/<jobId>.sock`, or a short temp-dir path when that would not fit in sun_path. */
+/**
+ * `<jobs dir>/<jobId>.sock` (the jobs dir is 0700), or, when that would not fit in sun_path, a socket in
+ * a fresh 0700 temp dir. The temp dir is unguessable so another user of a shared /tmp cannot squat it;
+ * `privateDir` is that dir, which the caller removes, or null.
+ */
 export function steeringSocketPath(workspaceRoot, jobId) {
   const preferred = path.join(resolveJobsDir(workspaceRoot), `${jobId}.sock`);
-  if (Buffer.byteLength(preferred) <= MAX_SOCKET_PATH_BYTES) return preferred;
-  return path.join(os.tmpdir(), `droid-${createHash("sha256").update(jobId).digest("hex").slice(0, 12)}.sock`);
+  if (Buffer.byteLength(preferred) <= MAX_SOCKET_PATH_BYTES) return { socketPath: preferred, privateDir: null };
+  const privateDir = fs.mkdtempSync(path.join(os.tmpdir(), "droid-steer-"));
+  return { socketPath: path.join(privateDir, "steer.sock"), privateDir };
 }
 
 /**
@@ -330,7 +335,8 @@ export function steeringSocketPath(workspaceRoot, jobId) {
  * answered by one `{"ok": true}` or `{"ok": false, "error": …}` line. Records `socketPath` on the job.
  */
 async function listenForSteering(job, session) {
-  const socketPath = steeringSocketPath(job.workspaceRoot, job.id);
+  const { socketPath, privateDir } = steeringSocketPath(job.workspaceRoot, job.id);
+  const removePrivateDir = () => { if (privateDir) fs.rmSync(privateDir, { recursive: true, force: true }); };
   const connections = new Set();
   const server = net.createServer(socket => {
     connections.add(socket);
@@ -348,11 +354,13 @@ async function listenForSteering(job, session) {
       socket.write(`${JSON.stringify(reply)}\n`);
     });
   });
-  await new Promise((resolve, reject) => { server.once("error", reject); server.listen(socketPath, resolve); });
+  try {
+    await new Promise((resolve, reject) => { server.once("error", reject); server.listen(socketPath, resolve); });
+  } catch (error) { removePrivateDir(); throw error; }
   updateActiveJob(job, current => ({ ...current, socketPath }));
   // Closing a unix socket server unlinks its path.
   return () => new Promise(resolve => {
-    server.close(() => resolve());
+    server.close(() => { removePrivateDir(); resolve(); });
     for (const socket of connections) socket.destroy();
   });
 }

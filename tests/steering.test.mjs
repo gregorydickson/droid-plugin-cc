@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -221,12 +221,11 @@ async function until(probe, what, deadline = Date.now() + 30000) {
   }
 }
 
-function cliFixture(t, { decision = "GO", lane = false, env: extraEnv = {} } = {}) {
+function cliFixture(t, { decision = "GO", lane = false, env: extraEnv = {}, data = makeTempDir("droid-steer-data-") } = {}) {
   const f = fixture("review-ok", { DROID_STEER_IDLE_MS: LONG_IDLE_MS, ...extraEnv });
   initGitRepo(f.cwd);
   fs.writeFileSync(path.join(f.cwd, "README.md"), "steer\n");
   run("git", ["add", "."], { cwd: f.cwd }); run("git", ["commit", "-m", "initial"], { cwd: f.cwd });
-  const data = makeTempDir("droid-steer-data-");
   const env = { ...f.env, CLAUDE_PLUGIN_DATA: data, DROID_COMPANION_SESSION_ID: "steer-tests" };
   if (lane) {
     env.DROID_BINARY = path.join(f.bin, "droid-lock.sh");
@@ -335,25 +334,48 @@ test("send queues the message as the next user turn mid-turn, and cancel removes
   assert.ok(await exits(droidPid), `droid ${droidPid} still running`);
 });
 
-test("the steering socket sits in the jobs dir unless that path overflows sun_path, then in a short temp path", () => {
+const LONG_DATA_ROOT = () => path.join(makeTempDir(), "x".repeat(100));
+const privateDirMode = dir => fs.statSync(dir).mode & 0o777;
+
+test("the steering socket sits in the jobs dir unless that path overflows sun_path, then in a fresh private temp dir", t => {
   const jobId = "task-steer-path";
   const withRoot = (root, action) => {
     const previous = process.env.CLAUDE_PLUGIN_DATA;
     process.env.CLAUDE_PLUGIN_DATA = root;
     try { return action(); } finally { if (previous === undefined) delete process.env.CLAUDE_PLUGIN_DATA; else process.env.CLAUDE_PLUGIN_DATA = previous; }
   };
-  const short = withRoot(fs.mkdtempSync("/tmp/ds-"), () => [steeringSocketPath("/r", jobId), path.join(resolveJobsDir("/r"), `${jobId}.sock`)]);
-  assert.equal(short[0], short[1]);
-  const long = withRoot(path.join(makeTempDir(), "x".repeat(100)), () => steeringSocketPath("/r", jobId));
-  assert.equal(long, path.join(os.tmpdir(), `droid-${createHash("sha256").update(jobId).digest("hex").slice(0, 12)}.sock`));
-  for (const socketPath of [short[0], long]) assert.ok(Buffer.byteLength(socketPath) <= 100, socketPath);
+  const short = withRoot(fs.mkdtempSync("/tmp/ds-"), () => ({ chosen: steeringSocketPath("/r", jobId), preferred: path.join(resolveJobsDir("/r"), `${jobId}.sock`) }));
+  assert.deepEqual(short.chosen, { socketPath: short.preferred, privateDir: null });
+  const root = LONG_DATA_ROOT();
+  const [first, second] = withRoot(root, () => [steeringSocketPath("/r", jobId), steeringSocketPath("/r", jobId)]);
+  t.after(() => { for (const { privateDir } of [first, second]) fs.rmSync(privateDir, { recursive: true, force: true }); });
+  for (const fallback of [first, second]) {
+    assert.equal(path.dirname(fallback.socketPath), fallback.privateDir);
+    assert.equal(path.dirname(fallback.privateDir), os.tmpdir());
+    assert.equal(privateDirMode(fallback.privateDir), 0o700, fallback.privateDir);
+  }
+  assert.notEqual(first.privateDir, second.privateDir, "the same job id must not map to a guessable shared path");
+  for (const socketPath of [short.chosen.socketPath, first.socketPath]) assert.ok(Buffer.byteLength(socketPath) <= 100, socketPath);
 });
 
-test("a running steerable job records the socket path the worker listens on", { timeout: CLI_TIMEOUT_MS }, async t => {
-  const c = cliFixture(t);
+test("a steerable job whose jobs-dir socket path overflows listens in a private temp dir and removes it when it ends", { timeout: CLI_TIMEOUT_MS }, async t => {
+  const c = cliFixture(t, { data: LONG_DATA_ROOT() });
   const { jobId } = c.launch();
   const { socketPath } = await c.steerable(jobId);
-  assert.equal(socketPath, c.withData(() => steeringSocketPath(c.cwd, jobId)));
+  const privateDir = path.dirname(socketPath);
+  assert.equal(path.dirname(privateDir), os.tmpdir());
+  assert.equal(privateDirMode(privateDir), 0o700);
+  assert.equal(c.invoke("send", jobId, "--end").status, 0);
+  await c.finished(jobId);
+  assert.ok(!fs.existsSync(privateDir), `${privateDir} outlived its job`);
+});
+
+test("a running steerable job records the jobs-dir socket path the worker listens on", { timeout: CLI_TIMEOUT_MS }, async t => {
+  // A short data root keeps the jobs-dir path inside sun_path; macOS's long TMPDIR would overflow it.
+  const c = cliFixture(t, { data: fs.mkdtempSync("/tmp/ds-") });
+  const { jobId } = c.launch();
+  const { socketPath } = await c.steerable(jobId);
+  assert.deepEqual(c.withData(() => steeringSocketPath(c.cwd, jobId)), { socketPath, privateDir: null });
   assert.equal(c.invoke("send", jobId, "--end").status, 0);
   await c.finished(jobId);
   assert.ok(!fs.existsSync(socketPath), `${socketPath} outlived its job`);
