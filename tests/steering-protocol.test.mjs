@@ -43,11 +43,12 @@ const transcriptOutputs = TRANSCRIPT.filter(row => row.dir === "out").map(row =>
 /**
  * Checks that every setting request was applied: the initialize result and each update's
  * settings_updated confirmation carry the requested value for every fence field the request
- * names, and list_tools allows exactly the tool list in force. Returns the confirmed fields.
+ * names, and list_tools allows exactly the tool list in force. Returns the confirmed fields and
+ * the tool list and autonomy in force after the last request.
  */
 function verifySettingRequests(requests, outputs) {
   const confirmed = new Set();
-  let toolList = null;
+  let toolList = null, autonomy = null;
   for (const { id, method, params } of requests) {
     const response = outputs.find(m => isResponse(m, id));
     assert.ok(response && !response.error, `${method} was answered without an error: ${JSON.stringify(response?.error)}`);
@@ -65,8 +66,16 @@ function verifySettingRequests(requests, outputs) {
       confirmed.add(key);
     }
     toolList = settings.restrictToolIds ?? toolList;
+    autonomy = settings.autonomyLevel ?? autonomy;
   }
-  return { confirmed, toolList };
+  return { confirmed, toolList, autonomy };
+}
+
+// Autonomy "off" removes the edit tools whatever the tool list says, so a Create refused there
+// proves nothing about the list: the probe must run where autonomy alone would allow Create.
+function assertProbeIsolatesToolList({ toolList, autonomy }) {
+  assert.ok(!toolList.includes("Create"), `the tool list in force is read-only: ${toolList}`);
+  assert.notEqual(autonomy, "off", "autonomy in force would allow Create, so only the tool list can refuse it");
 }
 
 function assertYesRowsConfirmed({ confirmed }) {
@@ -97,6 +106,8 @@ test("the captured transcript shows a read-only tool list refusing the Create pr
   const probe = transcriptRequests.find(request => request.method === "droid.add_user_message" && request.params.text.includes(PROBE_FILE));
   assert.ok(probe, "the transcript holds the Create probe");
   const from = TRANSCRIPT.findIndex(row => row.msg === probe);
+  const before = TRANSCRIPT.slice(0, from).filter(row => row.dir === "in" && SETTING_METHODS.has(row.msg.method)).map(row => row.msg);
+  assertProbeIsolatesToolList(verifySettingRequests(before, transcriptOutputs));
   const turn = TRANSCRIPT.slice(from).map(row => row.msg);
   const end = turn.findIndex(turnEnded);
   assert.ok(end > 0, "the probe turn completed");
@@ -164,7 +175,7 @@ test("live: real Droid confirms every captured setting request and the read-only
     const replay = verifySettingRequests(sent, session.outputs);
     assertYesRowsConfirmed(replay);
     if (!yes("tool list")) return;
-    assert.ok(!replay.toolList.includes("Create"), `the tool list in force is read-only: ${replay.toolList}`);
+    assertProbeIsolatesToolList(replay);
     const probe = transcriptRequests.find(request => request.method === "droid.add_user_message" && request.params.text.includes(PROBE_FILE));
     const { mark } = await session.request(probe.method, probe.params);
     const end = await session.waitFor(turnEnded, mark, 240000, "the probe turn");

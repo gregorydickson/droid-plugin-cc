@@ -18,7 +18,9 @@ With `--input-format stream-jsonrpc`, droid validates `-m`, `--auto`, `-r`, `--o
 | tool list | yes | the same requests with `restrictToolIds` (also `enabledToolIds`, `disabledToolIds`, `additionalToolIds`) | `settings.restrictToolIds`, and `droid.list_tools`, whose `result.tools[].currentlyAllowed` is true for exactly the listed tools |
 | `--settings` | yes | `droid exec --settings <file> --input-format stream-jsonrpc …` with `{"sessionDefaultSettings": {"model", "reasoningEffort", "autonomyLevel"}}`, then `droid.initialize_session` with no settings | the initialize result's `settings` carry the file's values instead of the user's defaults |
 
-The tool list takes effect, not only the echo: with `restrictToolIds` set to `Read`, `LS`, `Grep` and `Glob`, a request to `Create` `probe.txt` was answered "no Create tool" and no file was written.
+The tool list takes effect, not only the echo: with autonomy `low` and `restrictToolIds` set to `Read`, `LS`, `Grep` and `Glob`, a request to `Create` `probe.txt` was answered "no Create tool" and no file was written. With autonomy `low` and `Create` added to the list, the same request created the file.
+
+Autonomy is a fence of its own. At autonomy `off`, `droid.list_tools` leaves out the edit tools even when `restrictToolIds` names them, and `Create` is refused whatever the list says. `restrictToolIds` accepts either a tool's `llmId` (`Create`) or its `id` (`create-cli`); a name droid does not know is left out of the list in force, so the list to trust is the one `droid.list_tools` reports, not the one requested.
 
 ## The requests
 
