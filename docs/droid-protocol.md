@@ -38,3 +38,21 @@ Verified on real Droid 0.238.0: omitting `--auto` runs at read-only autonomy. Wi
 This adapter uses prompt-level schema instructions and local Ajv validation with one read-only repair retry. The CLI help exposes no schema flag. The installed controlled-RPC schema does include `structuredOutputFormat`; the plugin does not depend on that unverified enforcement path.
 
 Reference: [Factory headless execution documentation](https://docs.factory.com/droid-exec/overview). Local observations above take precedence where help, documentation, and runtime behavior differ.
+
+## Argv per turn kind (Droid 1.1.0)
+
+All turns pass `exec --cwd DIR -f PROMPT_FILE`. `-m`, `-r`, `--append-system-prompt-file FILE` (developer instructions) and `--tag '{"name":..., "metadata":{"jobId":..., "kind":...}}'` (job id and kind, Factory session metadata; omitted on a steerable job and on a CLI older than 1.1.0) apply where the turn kind allows them.
+
+| Turn kind | Output format | Fence and mode flags |
+|:---|:---|:---|
+| Fresh read-only | `stream-jsonrpc` | no `--auto`; `--only-tools` is `Read,LS,Grep,Glob,Execute` plus web, skill, todo and subagent tools (minus `--no-web` / `--no-subagents`) |
+| Run-commands | `stream-jsonrpc` | `--auto medium --only-tools Read,LS,Grep,Glob,Execute` plus `MCP:` selectors |
+| Write | `stream-jsonrpc` | `--auto medium`, Droid's default toolset, selectors via `--add-tools` |
+| Resume | `stream-json` | the fence above plus `--session-id ID` |
+| Fork | `stream-json` | the fence above plus `--fork ID` (never on a repair turn) |
+| Spec | as the fence above | adds `--use-spec`, `--spec-model`, `--spec-reasoning-effort` |
+| Mission | `stream-json` | `--mission --auto high`, no tool fence, `--worker-model`, `--validator-model` and the matching `--*-reasoning-effort`; see [missions](missions.md) |
+| Schema repair | as the original turn | the narrow `Read,LS,Grep,Glob,Execute` list, no MCP selectors, no system prompt, no fork, no mission |
+| Steerable | held-open stdin JSON-RPC | see [live steering](live-steering.md) |
+
+Read-only turns have no file-editing tools but run at the autonomy in the user's Factory settings (for example `auto-high`), so Execute can still change files. The `Read,LS,Grep,Glob,Execute` list above is the run-commands and schema-repair list, and "Exec ended early: insufficient permission to proceed" is what a command above the autonomy ends with. The stop-time review gate passes `--no-web`.
