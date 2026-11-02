@@ -45,7 +45,7 @@ One-shot turns pass `exec --cwd DIR -f PROMPT_FILE`. A steerable turn passes onl
 
 | Turn kind | Output format | Fence and mode flags |
 |:---|:---|:---|
-| Fresh read-only | `stream-jsonrpc` | no `--auto`; `--only-tools` is `Read,LS,Grep,Glob,Execute` plus `WebSearch`, `FetchUrl`, `Skill`, `ToolSearch`, `TodoWrite` and the subagent tools `Task`, `TaskOutput`, `TaskStop` (minus `--no-web` / `--no-subagents`) |
+| Fresh read-only | `stream-jsonrpc` | no `--auto`; `--only-tools` is `Read,LS,Grep,Glob,Execute` plus `WebSearch`, `FetchUrl`, `Skill`, `ToolSearch`, `TodoWrite` and the subagent tools `Task`, `TaskOutput`, `TaskStop` (minus `--no-web` / `--no-subagents`); on a CLI older than 1.1.0 only `Read,LS,Grep,Glob,Execute`, since Droid rejects an unknown tool id |
 | Run-commands | `stream-jsonrpc` | `--auto medium --only-tools Read,LS,Grep,Glob,Execute` plus `MCP:` selectors |
 | Write | `stream-jsonrpc` | `--auto medium`, Droid's default toolset, selectors via `--add-tools` |
 | Resume | `stream-json` | the fence above plus `--session-id ID` |

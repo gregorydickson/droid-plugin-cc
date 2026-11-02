@@ -284,7 +284,7 @@ test("every export the wiring depends on is used by a production module outside 
   const sources = new Map(productionFiles().map(file => [file, withoutModuleLinks(fs.readFileSync(file, "utf8"))]));
   const definingFile = name => [...sources].find(([, text]) => new RegExp(`export (?:async )?(?:function|const) ${name}\\b`).test(text))?.[0];
   const names = [
-    "READ_ONLY_TOOLS", "WEB_TOOLS", "SUBAGENT_TOOLS", "RUN_COMMANDS_TOOLS", "REPAIR_TOOLS", "getDroidVersion", "droidCapabilities",
+    "readOnlyToolbox", "WEB_TOOLS", "SUBAGENT_TOOLS", "RUN_COMMANDS_TOOLS", "REPAIR_TOOLS", "getDroidVersion", "droidCapabilities",
     "requireDroidCapability", "JOB_KINDS", "MODEL_RESOLVING_COMMANDS", "findJobs", "getGlobalDefaults", "setGlobalDefaults", "effortWarning", "runSteerableSession"
   ];
   const orphans = names.filter(name => {

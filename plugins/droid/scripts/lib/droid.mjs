@@ -26,7 +26,7 @@ export const JOB_KINDS = Object.freeze(["task", "review", "adversarial-review", 
 // Commands whose spawned droid takes -m/-r from resolveModelChoice. A new one must be added here and to the model-choice test matrix.
 export const MODEL_RESOLVING_COMMANDS = Object.freeze(["task", "task --fork", "review", "adversarial-review", "compare", "verify-claims", "mission"]);
 export const TAG_NAME = "droid-plugin-cc";
-const CAPABILITY_NAMES = ["tag", "systemPromptFile", "mission", "fork", "spec", "steer"];
+const CAPABILITY_NAMES = ["tag", "systemPromptFile", "mission", "fork", "spec", "steer", "readOnlyToolbox"];
 const versionCache = new Map();
 
 function parseSemver(text) {
@@ -227,10 +227,18 @@ export const RUN_COMMANDS_TOOLS = Object.freeze(["Read", "LS", "Grep", "Glob", "
 export const REPAIR_TOOLS = RUN_COMMANDS_TOOLS;
 export const READ_ONLY_TOOLS = Object.freeze([...RUN_COMMANDS_TOOLS, ...WEB_TOOLS, "Skill", "ToolSearch", "TodoWrite", ...SUBAGENT_TOOLS]);
 
-/** READ_ONLY_TOOLS minus exactly the groups a job opted out of. */
-function readOnlyTools({ noWeb, noSubagents }) {
+/**
+ * The read-only list a CLI of `version` gets. droid rejects an --only-tools list naming a tool it
+ * does not know, and the wide list is verified on 1.1.0 only, so an older CLI keeps the narrow five.
+ */
+export function readOnlyToolbox(version) {
+  return droidCapabilities(version).readOnlyToolbox ? READ_ONLY_TOOLS : RUN_COMMANDS_TOOLS;
+}
+
+/** The CLI's read-only toolbox minus exactly the groups a job opted out of. */
+function readOnlyTools({ noWeb, noSubagents, env }) {
   const dropped = new Set([...(noWeb ? WEB_TOOLS : []), ...(noSubagents ? SUBAGENT_TOOLS : [])]);
-  return READ_ONLY_TOOLS.filter(tool => !dropped.has(tool));
+  return readOnlyToolbox(getDroidVersion(env ?? process.env).version).filter(tool => !dropped.has(tool));
 }
 
 /** `server` or `server/tool` (percent-encoded segments), optionally written with droid's `MCP:` prefix. */
@@ -268,7 +276,7 @@ function sandboxFence(options) {
  *
  * Fences: read-only is droid's default autonomy over READ_ONLY_TOOLS (the
  * wide toolbox: web, skills, subagents, minus whatever --no-web/--no-subagents
- * drop) plus any MCP selectors; run-commands is
+ * drop; RUN_COMMANDS_TOOLS on a CLI older than 1.1.0) plus any MCP selectors; run-commands is
  * --auto medium over RUN_COMMANDS_TOOLS plus MCP selectors (commands run, no
  * file tools, but the shell can still write). Run-commands stays on the narrow
  * five because the lane wrapper refuses any run-commands --only-tools member

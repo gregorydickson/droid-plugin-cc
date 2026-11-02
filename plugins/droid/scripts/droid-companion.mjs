@@ -29,7 +29,7 @@ import {
     runSteerableSession,
     JOB_KINDS,
     MODEL_RESOLVING_COMMANDS,
-    READ_ONLY_TOOLS,
+    readOnlyToolbox,
     WEB_TOOLS,
     SUBAGENT_TOOLS,
     RUN_COMMANDS_TOOLS,
@@ -253,7 +253,7 @@ async function buildSetupReport(cwd, actionsTaken = []) {
     sessionRuntime: getSessionRuntimeStatus(process.env, workspaceRoot),
     reviewGateEnabled: Boolean(config.stopReviewGate),
     toolFence: {
-      readOnly: READ_ONLY_TOOLS, web: WEB_TOOLS, subagents: SUBAGENT_TOOLS,
+      readOnly: readOnlyToolbox(droidVersion), web: WEB_TOOLS, subagents: SUBAGENT_TOOLS,
       runCommands: RUN_COMMANDS_TOOLS, schemaRepair: REPAIR_TOOLS
     },
     defaults,

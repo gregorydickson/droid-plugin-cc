@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { buildEnv, installFakeDroid } from "./fake-droid-fixture.mjs";
 import { initGitRepo, makeTempDir, run } from "./helpers.mjs";
-import { buildDroidExecArgs, normalizeMcpToolSelector, READ_ONLY_TOOLS, RUN_COMMANDS_TOOLS, REPAIR_TOOLS, WEB_TOOLS, SUBAGENT_TOOLS } from "../plugins/droid/scripts/lib/droid.mjs";
+import { buildDroidExecArgs, normalizeMcpToolSelector, readOnlyToolbox, READ_ONLY_TOOLS, RUN_COMMANDS_TOOLS, REPAIR_TOOLS, WEB_TOOLS, SUBAGENT_TOOLS } from "../plugins/droid/scripts/lib/droid.mjs";
 
 const SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "plugins", "droid", "scripts", "droid-companion.mjs");
 const FILE_EDITING_TOOLS = ["Edit", "Create", "ApplyPatch", "MultiEdit", "Write"];
@@ -191,6 +191,37 @@ test("buildDroidExecArgs drops exactly the opted-out tool groups and keeps MCP s
     }
   }
   for (const tool of RUN_COMMANDS_TOOLS) assert.ok(toolSet(buildDroidExecArgs("/repo", "/p.txt", { sandbox: "read-only", noWeb: true, noSubagents: true }), "--only-tools").has(tool), tool);
+});
+
+// droid rejects an --only-tools list naming a tool it lacks, so a CLI below 1.1.0 must not see the wide list.
+const TOOLBOX_BY_VERSION = [["0.238.0", RUN_COMMANDS_TOOLS], ["1.1.0", READ_ONLY_TOOLS], ["droid-cli garbage", READ_ONLY_TOOLS]];
+const fakeEnv = version => {
+  const binDir = makeTempDir();
+  installFakeDroid(binDir);
+  return { binDir, env: { ...buildEnv(binDir), FAKE_DROID_VERSION: version } };
+};
+
+test("readOnlyToolbox is the wide list from 1.1.0 (or an unparseable version) and the narrow five below it", () => {
+  for (const [version, expected] of TOOLBOX_BY_VERSION) assert.equal(readOnlyToolbox(version), expected, version);
+});
+
+test("a read-only turn's --only-tools follows the installed CLI's version, fresh and resumed", () => {
+  for (const [version, expected] of TOOLBOX_BY_VERSION) {
+    const { env } = fakeEnv(version);
+    for (const resumeThreadId of [undefined, "session-1"]) {
+      const args = buildDroidExecArgs("/repo", "/p.txt", { sandbox: "read-only", resumeThreadId, mcpTools: ["github"], env });
+      assert.deepEqual(toolSet(args, "--only-tools"), new Set([...expected, "MCP:github"]), `${version} ${resumeThreadId ?? "fresh"}`);
+    }
+  }
+});
+
+test("a read-only task on a CLI below 1.1.0 runs with the narrow five and no wide-only tool", () => {
+  const ctx = repo();
+  const { binDir, env } = fakeEnv("0.238.0");
+  const result = run("node", [SCRIPT, "task", "look around"], { cwd: ctx.cwd, env });
+  assert.equal(result.status, 0, result.stderr);
+  const recorded = JSON.parse(fs.readFileSync(path.join(binDir, "fake-droid-state.json"), "utf8")).threadRequests[0].args;
+  assert.deepEqual(toolSet(recorded, "--only-tools"), new Set(RUN_COMMANDS_TOOLS));
 });
 
 for (const { flags, dropped } of OPT_OUTS) {

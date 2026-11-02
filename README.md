@@ -6,7 +6,7 @@ Ported from gregorydickson/codex-plugin-cc at ff417c0, a fork of openai/codex-pl
 
 ## Install
 
-Requires Node.js 18.18+ and an authenticated [Factory Droid CLI](https://docs.factory.ai/cli/getting-started/overview) on PATH. Authenticate with `/login` in Droid or `FACTORY_API_KEY`. The 1.1.0 features (missions, `--fork`, `--spec`, `--steerable`, job tags, the system-prompt file) need Droid CLI 1.1.0 or newer; `/droid:setup` reports the installed version. `/droid:mission`, `--fork`, `--spec` and `--steerable` refuse on an older CLI, while job tags and the system-prompt file fall back to the 0.1.x behaviour. The widened read-only toolbox is not version-gated. `DROID_BINARY` can select an absolute binary path (or a Node `.mjs`/`.cjs` wrapper).
+Requires Node.js 18.18+ and an authenticated [Factory Droid CLI](https://docs.factory.ai/cli/getting-started/overview) on PATH. Authenticate with `/login` in Droid or `FACTORY_API_KEY`. The 1.1.0 features (missions, `--fork`, `--spec`, `--steerable`, job tags, the system-prompt file) need Droid CLI 1.1.0 or newer; `/droid:setup` reports the installed version. `/droid:mission`, `--fork`, `--spec` and `--steerable` refuse on an older CLI, while job tags, the system-prompt file and the widened read-only toolbox fall back to the 0.1.x behaviour (read-only jobs get `Read,LS,Grep,Glob,Execute`, because Droid rejects an `--only-tools` list naming a tool it does not know). `DROID_BINARY` can select an absolute binary path (or a Node `.mjs`/`.cjs` wrapper).
 
 ```sh
 claude plugin marketplace add /absolute/path/to/droid-plugin-cc

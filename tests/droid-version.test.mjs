@@ -8,6 +8,8 @@ import { makeTempDir, run } from "./helpers.mjs";
 import {
   DROID_FEATURE_FLOOR,
   droidCapabilities,
+  READ_ONLY_TOOLS,
+  RUN_COMMANDS_TOOLS,
   requireDroidCapability
 } from "../plugins/droid/scripts/lib/droid.mjs";
 
@@ -65,6 +67,11 @@ test("setup reports the default fake at the floor with no version step", () => {
   const report = setupReport();
   assert.equal(report.droid.version, DROID_FEATURE_FLOOR);
   assert.equal(namesFloor(report), false);
+});
+
+test("setup reports the read-only toolbox the installed CLI actually gets", () => {
+  assert.deepEqual(setupReport("0.238.0").toolFence.readOnly, RUN_COMMANDS_TOOLS);
+  assert.deepEqual(setupReport().toolFence.readOnly, READ_ONLY_TOOLS);
 });
 
 test("setup reports an unparseable version as null with a warning", () => {
