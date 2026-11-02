@@ -331,7 +331,6 @@ export function steeringSocketPath(workspaceRoot, jobId) {
  */
 async function listenForSteering(job, session) {
   const socketPath = steeringSocketPath(job.workspaceRoot, job.id);
-  fs.rmSync(socketPath, { force: true });
   const connections = new Set();
   const server = net.createServer(socket => {
     connections.add(socket);
@@ -351,10 +350,10 @@ async function listenForSteering(job, session) {
   });
   await new Promise((resolve, reject) => { server.once("error", reject); server.listen(socketPath, resolve); });
   updateActiveJob(job, current => ({ ...current, socketPath }));
+  // Closing a unix socket server unlinks its path.
   return () => new Promise(resolve => {
     server.close(() => resolve());
     for (const socket of connections) socket.destroy();
-    fs.rmSync(socketPath, { force: true });
   });
 }
 
