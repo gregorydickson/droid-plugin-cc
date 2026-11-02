@@ -12,6 +12,7 @@ import { writeJobFile } from "../plugins/droid/scripts/lib/state.mjs";
 const script = fileURLToPath(new URL("../plugins/droid/scripts/droid-companion.mjs", import.meta.url));
 const THREAD_FIELDS = ["cwd"];
 const JOB_FIELDS = ["write", "worktree", "lockCmd", "unlockCmd", "outputSchema", "pauseAndAsk", "effectiveProfile", "activeServers", "developerInstructions", "config", "sandbox"];
+const autonomy = args => args.includes("--auto") ? args[args.indexOf("--auto") + 1] : null;
 const pick = (object, fields) => Object.fromEntries(fields.map(field => [field, object[field] ?? null]));
 
 function git(cwd, ...args) {
@@ -65,7 +66,7 @@ function assertInherited(ctx, original, resumed) {
   const continued = requests.at(-1);
   assert.equal(continued.method, "resume");
   assert.equal(continued.threadId, original.threadId);
-  assert.equal(continued.args[continued.args.indexOf("--auto") + 1], "medium");
+  assert.equal(autonomy(continued.args), "medium");
   assert.deepEqual(pick(continued, THREAD_FIELDS), pick(started, THREAD_FIELDS));
   assert.deepEqual(pick(readStoredJob(ctx.linked, resumed.jobId), JOB_FIELDS), pick(readStoredJob(ctx.linked, original.jobId), JOB_FIELDS));
   assert.deepEqual(ctx.lockEvents(), ["lock", "unlock", "lock", "unlock"]);
@@ -103,7 +104,7 @@ test("answer keeps the paused job's id, thread, write access, lock, and result-f
   assert.equal(answered.jobId, paused.jobId);
   const requests = ctx.fake().threadRequests;
   assert.deepEqual(pick(requests.at(-1), THREAD_FIELDS), pick(requests.find(entry => entry.method === "start"), THREAD_FIELDS));
-  assert.ok(requests.at(-1).args.includes("medium"));
+  assert.equal(autonomy(requests.at(-1).args), "medium");
   assert.match(ctx.fake().lastTurnStart.systemPrompt, /Never push\.[\s\S]*JSON stop report/);
   assert.deepEqual(ctx.lockEvents(), ["lock", "unlock", "lock", "unlock"]);
   assert.equal(JSON.parse(fs.readFileSync(published, "utf8")).status, "completed");
@@ -129,7 +130,7 @@ test("resume flags override the inherited options", () => {
   assert.deepEqual(stored.outputSchema, JSON.parse(fs.readFileSync(ctx.paths.otherSchema, "utf8")));
   assert.equal(stored.model, "override-model");
   assert.equal(stored.lockCmd, readStoredJob(ctx.linked, original.jobId).lockCmd);
-  assert.ok(ctx.fake().threadRequests.at(-1).args.includes("medium"));
+  assert.equal(autonomy(ctx.fake().threadRequests.at(-1).args), "medium");
 });
 
 test("resume keeps the previous slice's result file unless it is the same job", () => {
@@ -190,7 +191,7 @@ test("a session recorded before worker arguments were kept resumes from its stor
   assert.match(rejected.stderr, /predates resume overrides/);
   const resumed = ctx.cli("sessions", "resume", "slice-one", "Next slice");
   assert.equal(resumed.status, "completed");
-  assert.ok(ctx.fake().threadRequests.at(-1).args.includes("medium"));
+  assert.equal(autonomy(ctx.fake().threadRequests.at(-1).args), "medium");
   assert.equal(readStoredJob(ctx.linked, resumed.jobId).resultFile, null);
   assert.equal(JSON.parse(fs.readFileSync(first, "utf8")).jobId, original.jobId);
 });
