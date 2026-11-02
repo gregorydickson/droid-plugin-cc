@@ -251,6 +251,28 @@ test("mission command forwards a background mission and states what a mission ru
   assert.deepEqual(flagsIn(hint), accepted, "argument-hint lists exactly the flags the companion's mission accepts");
 });
 
+const argumentHint = source => source.match(/^argument-hint: (['"])(.*)\1$/m)?.[2] ?? "";
+const usageLine = subcommand => run(process.execPath, [path.join(PLUGIN_ROOT, "scripts", "droid-companion.mjs"), "help"]).stdout
+  .split("\n").find(line => line.includes(`droid-companion.mjs ${subcommand} `));
+
+test("setup command's argument-hint lists exactly the flags the companion's setup accepts", () => {
+  const source = read("commands/setup.md");
+  assert.match(source, /droid-companion\.mjs" setup --json \$ARGUMENTS/);
+  const accepted = flagsIn(usageLine("setup"));
+  assert.ok(accepted.delete("--json"), "companion setup usage lost --json");
+  assert.deepEqual(flagsIn(argumentHint(source)), accepted);
+  assert.match(source, /^Setup runs `droid doctor` and reports it as "host Droid health"\. `loggedIn` /m);
+  assert.match(source, /^- Defaults apply to all workspaces using this plugin data dir\.$/m);
+});
+
+test("rescue, status and models docs name every user-facing feature they route", () => {
+  const rescueHint = flagsIn(argumentHint(read("commands/rescue.md")));
+  for (const flag of ["--no-web", "--no-subagents", "--fork", "--spec", "--spec-model", "--spec-effort", "--steerable"]) assert.ok(rescueHint.has(flag), `rescue.md argument-hint lacks ${flag}`);
+  assert.match(read("commands/rescue.md"), /^- The user steers the job with `node "\$\{CLAUDE_PLUGIN_ROOT\}\/scripts\/droid-companion\.mjs" send <job-id> <message>`/m);
+  assert.match(read("commands/status.md"), /droid-companion\.mjs" sessions find <text>`/);
+  assert.match(read("commands/models.md"), /tier aliases \(for example `glm-\{\.\.\.\}`\) and version wildcards \(for example `glm-\*`\)/);
+});
+
 const COMPANION = path.join(PLUGIN_ROOT, "scripts", "droid-companion.mjs");
 const SCRIPTS_DIR = path.join(PLUGIN_ROOT, "scripts");
 
