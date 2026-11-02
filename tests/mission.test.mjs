@@ -10,6 +10,7 @@ import { TERMINAL_STATUSES } from "../plugins/droid/scripts/lib/tracked-jobs.mjs
 import { writeJobFile, upsertJob } from "../plugins/droid/scripts/lib/state.mjs";
 import { resolveWorkspaceRoot } from "../plugins/droid/scripts/lib/workspace.mjs";
 import { installFakeDroid, buildEnv } from "./fake-droid-fixture.mjs";
+import { lastMissionWriteMs, MISSION_CANCEL_GOAL, MISSION_STALL_MS, MISSION_CEILING_MS } from "./mission-ownership.mjs";
 
 const flagValue = (args, flag) => args.includes(flag) ? args[args.indexOf(flag) + 1] : null;
 const MISSION_FLAGS = ["--mission", "--worker-model", "--validator-model", "--worker-reasoning-effort", "--validator-reasoning-effort"];
@@ -254,16 +255,10 @@ test("mission.md states the refusals and the cancel scope the runtime and docs/m
 });
 
 // Live missions spend Factory credits: DROID_SMOKE_MISSION=1 only, real login, a temp repo with no remote.
-const live = { skip: process.env.DROID_SMOKE_MISSION !== "1", timeout: 600000 };
-const LIVE_GOAL = "Create hello.txt containing the word hi, then stop.";
-const LIVE_CANCEL_GOAL = "Do not create or edit any file yourself. Start exactly one worker for this mission. "
-  + "The worker must first run the shell command `sleep 120`, then create hello.txt containing the word hi.";
 const CLI_TIMEOUT_MS = 60000;
 const AFTER_CANCEL_MS = 10000;
-const SETTLE_MS = live.timeout - CLI_TIMEOUT_MS;
-// glm can plan for minutes before its first worker starts, so the wait for one spends the whole
-// test budget except one more status call, the cancel and the after-cancel check.
-const CANCEL_FALLBACK_MS = live.timeout - 2 * CLI_TIMEOUT_MS - AFTER_CANCEL_MS;
+const live = { skip: process.env.DROID_SMOKE_MISSION !== "1", timeout: MISSION_CEILING_MS + 2 * CLI_TIMEOUT_MS + AFTER_CANCEL_MS };
+const LIVE_GOAL = "Create hello.txt containing the word hi, then stop.";
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function liveMission(t) {
@@ -286,12 +281,17 @@ function liveMission(t) {
   return { cwd, cli, start };
 }
 
-async function settle(mission, jobId) {
-  const deadline = Date.now() + SETTLE_MS;
+// Polls the job until `done(job)` holds or it ends, or until the mission stalls (nothing it owns written
+// for MISSION_STALL_MS, docs/missions.md) or hits MISSION_CEILING_MS. `stalled` says which stop fired.
+async function watch(mission, jobId, done = () => false) {
+  const started = Date.now();
+  let lastActivityMs = started;
   for (;;) {
     const job = mission.cli("status", jobId).job;
-    if (TERMINAL_STATUSES.has(job.status) || Date.now() > deadline) return job;
-    await sleep(5000);
+    lastActivityMs = Math.max(lastActivityMs, lastMissionWriteMs(mission.cwd, job.threadId));
+    if (TERMINAL_STATUSES.has(job.status) || done(job)) return { job, stalled: false };
+    if (Date.now() - lastActivityMs > MISSION_STALL_MS || Date.now() - started > MISSION_CEILING_MS) return { job, stalled: true };
+    await sleep(2000);
   }
 }
 
@@ -318,9 +318,9 @@ const isMissionWorker = proc => proc.command.includes("--input-format stream-jso
 
 test("live: a glm mission runs to completed and records its Droid session", live, async t => {
   const mission = liveMission(t);
-  const job = await settle(mission, mission.start(LIVE_GOAL));
+  const { job, stalled } = await watch(mission, mission.start(LIVE_GOAL));
   assert.deepEqual({ kind: job.kind, status: job.status, model: job.model }, { kind: "mission", status: "completed", model: SMOKE_MODEL },
-    JSON.stringify(job.progressPreview));
+    `stalled=${stalled} ${JSON.stringify(job.progressPreview)}`);
   assert.equal(typeof job.threadId, "string");
   assert.notEqual(job.threadId.trim(), "", "a completed mission records its Droid session id");
   assert.match(fs.readFileSync(path.join(mission.cwd, "hello.txt"), "utf8"), /\bhi\b/i);
@@ -328,18 +328,18 @@ test("live: a glm mission runs to completed and records its Droid session", live
 
 test("live: cancel stops what docs/missions.md says it stops", live, async t => {
   const mission = liveMission(t);
-  const jobId = mission.start(LIVE_CANCEL_GOAL);
+  const jobId = mission.start(MISSION_CANCEL_GOAL);
   const seen = new Map();
   t.after(() => { for (const pid of seen.keys()) { try { process.kill(pid, "SIGKILL"); } catch { /* gone */ } } });
-  const started = Date.now();
-  let job;
-  for (;;) {
-    job = mission.cli("status", jobId).job;
+  // The cancel waits for a live mission worker process, never a timer: cancelling before one exists checks nothing.
+  const workerRunning = () => {
     for (const proc of missionTree(processes(), jobId)) if (!seen.has(proc.pid)) seen.set(proc.pid, proc);
-    if (TERMINAL_STATUSES.has(job.status) || [...seen.values()].some(isMissionWorker) || Date.now() - started > CANCEL_FALLBACK_MS) break;
-    await sleep(2000);
-  }
-  assert.equal(job.status, "running", `the mission must still be running when cancelled: ${JSON.stringify(job.progressPreview)}`);
+    const alive = new Set(processes().map(proc => proc.pid));
+    return [...seen.values()].some(proc => isMissionWorker(proc) && alive.has(proc.pid));
+  };
+  const { job, stalled } = await watch(mission, jobId, workerRunning);
+  assert.equal(job.status, "running", `the mission ended with no worker process ever seen: stalled=${stalled} ${JSON.stringify(job.progressPreview)}`);
+  assert.equal(stalled, false, `the mission stalled before a worker started: ${JSON.stringify(job.progressPreview)}`);
   assert.equal(mission.cli("cancel", jobId).status, "cancelled");
   await sleep(AFTER_CANCEL_MS);
   const scope = recordedCancelScope();

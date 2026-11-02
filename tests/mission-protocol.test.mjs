@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { spawn, spawnSync } from "node:child_process";
@@ -7,7 +6,8 @@ import { createInterface } from "node:readline";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { makeTempDir, initGitRepo, run, SMOKE_MODEL } from "./helpers.mjs";
-import { isDroidBinary, withDescendants, missionProcesses } from "./mission-ownership.mjs";
+import { isDroidBinary, withDescendants, missionProcesses, FACTORY_HOME, sessionsDir, lastMissionWriteMs,
+  MISSION_CANCEL_GOAL as CANCEL_GOAL, MISSION_STALL_MS as STALL_MS, MISSION_CEILING_MS } from "./mission-ownership.mjs";
 
 // Live probe of `droid exec --mission`; docs/missions.md records what it found.
 // Missions spend credits, so each scenario runs once. DROID_MISSION_REPORT=<dir>
@@ -15,22 +15,11 @@ import { isDroidBinary, withDescendants, missionProcesses } from "./mission-owne
 // against saved reports without starting a mission.
 const REPLAY = process.env.DROID_MISSION_REPLAY;
 const REPORT = process.env.DROID_MISSION_REPORT;
-// A mission is stuck when nothing it owns has written for STALL_MS: a GLM mission runs its auto-injected
-// validators as further workers, so its length varies run to run while its quiet spells stay short
-// (docs/missions.md). MISSION_CEILING_MS only stops a mission that keeps writing without finishing.
-const STALL_MS = 180000;
-const MISSION_CEILING_MS = 1500000;
 const AFTER_CANCEL_MS = 10000;
 const gate = { skip: process.env.DROID_SMOKE_MISSION !== "1" && !REPLAY, timeout: MISSION_CEILING_MS + 6 * AFTER_CANCEL_MS };
 const DOC = new URL("../docs/missions.md", import.meta.url);
 const GOAL = "Create hello.txt containing the word hi, then stop.";
-// The orchestrator must write the mission's own files before StartMissionRun can spawn a worker, so the
-// goal forbids it only the work itself; the worker's sleep keeps it alive past the first sample that sees it.
-const CANCEL_GOAL = "Run this as a mission with exactly one feature, implemented by exactly one worker. "
-  + "You may write the mission's planning files, but you must not run the sleep or create hello.txt yourself. "
-  + "The worker must first run the shell command `sleep 600`, then create hello.txt containing the word hi.";
 const SAMPLE_MS = 2000;
-const FACTORY_HOME = path.join(process.env.FACTORY_HOME_OVERRIDE ?? os.homedir(), ".factory");
 const observed = {};
 
 function missionRepo() {
@@ -63,21 +52,6 @@ function workerProcesses(lineage, rootPid) {
   const seeds = lineage.filter(proc => proc.pid !== rootPid && (proc.hasSessionId || isDroidBinary(proc))).map(proc => proc.pid);
   const workers = withDescendants(lineage, seeds);
   return lineage.filter(proc => workers.has(proc.pid));
-}
-
-const sessionsDir = cwd => path.join(FACTORY_HOME, "sessions", cwd.replace(/[/\\]/g, "-"));
-
-// The newest write to anything the mission keeps on disk: every session log for its cwd (orchestrator,
-// workers, validators and their subagents) and the mission's own directory.
-function lastMissionWriteMs(cwd, sessionId) {
-  const dirs = [sessionsDir(cwd), ...(sessionId ? [path.join(FACTORY_HOME, "missions", sessionId)] : [])];
-  let latest = 0;
-  for (const dir of dirs) {
-    let names = [];
-    try { names = fs.readdirSync(dir); } catch { continue; }
-    for (const name of names) { try { latest = Math.max(latest, fs.statSync(path.join(dir, name)).mtimeMs); } catch { /* removed */ } }
-  }
-  return latest;
 }
 
 // Session files Droid wrote for this cwd, with each one's mission role.

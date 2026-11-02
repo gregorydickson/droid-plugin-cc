@@ -1,3 +1,37 @@
+import os from "node:os";
+import path from "node:path";
+import fs from "node:fs";
+
+// Shared by the live mission probes (mission-protocol.test.mjs) and the plugin's live mission tests (mission.test.mjs).
+export const FACTORY_HOME = path.join(process.env.FACTORY_HOME_OVERRIDE ?? os.homedir(), ".factory");
+
+// A mission is stuck when nothing it owns has written for MISSION_STALL_MS: a GLM mission runs its auto-injected
+// validators as further workers, so its length varies run to run while its quiet spells stay short
+// (docs/missions.md). MISSION_CEILING_MS only stops a mission that keeps writing without finishing.
+export const MISSION_STALL_MS = 180000;
+export const MISSION_CEILING_MS = 1500000;
+
+// The orchestrator must write the mission's own files before StartMissionRun can spawn a worker, so the
+// goal forbids it only the work itself; the worker's sleep keeps it alive past the first sample that sees it.
+export const MISSION_CANCEL_GOAL = "Run this as a mission with exactly one feature, implemented by exactly one worker. "
+  + "You may write the mission's planning files, but you must not run the sleep or create hello.txt yourself. "
+  + "The worker must first run the shell command `sleep 600`, then create hello.txt containing the word hi.";
+
+export const sessionsDir = cwd => path.join(FACTORY_HOME, "sessions", cwd.replace(/[/\\]/g, "-"));
+
+// The newest write to anything the mission keeps on disk: every session log for its cwd (orchestrator,
+// workers, validators and their subagents) and the mission's own directory.
+export function lastMissionWriteMs(cwd, sessionId) {
+  const dirs = [sessionsDir(cwd), ...(sessionId ? [path.join(FACTORY_HOME, "missions", sessionId)] : [])];
+  let latest = 0;
+  for (const dir of dirs) {
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch { continue; }
+    for (const name of names) { try { latest = Math.max(latest, fs.statSync(path.join(dir, name)).mtimeMs); } catch { /* removed */ } }
+  }
+  return latest;
+}
+
 export const isDroidBinary = proc => /(^|\/)(droid|factoryd)$/.test(proc.command.split(" ")[0]);
 
 // The pids in `seeds` plus every process descended from them.
