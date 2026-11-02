@@ -23,6 +23,8 @@ export function getDroidAvailability(cwd) {
 
 export const DROID_FEATURE_FLOOR = "1.1.0";
 export const JOB_KINDS = Object.freeze(["task", "review", "adversarial-review", "mission"]);
+// Commands whose spawned droid takes -m/-r from resolveModelChoice. A new one must be added here and to the model-choice test matrix.
+export const MODEL_RESOLVING_COMMANDS = Object.freeze(["task", "task --fork", "review", "adversarial-review", "compare", "verify-claims", "mission"]);
 export const TAG_NAME = "droid-plugin-cc";
 const CAPABILITY_NAMES = ["tag", "systemPromptFile", "mission", "fork", "spec", "steer"];
 const versionCache = new Map();

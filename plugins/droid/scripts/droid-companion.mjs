@@ -27,7 +27,13 @@ import {
     readOutputSchema,
     runDroidTurn,
     runSteerableSession,
-    JOB_KINDS
+    JOB_KINDS,
+    MODEL_RESOLVING_COMMANDS,
+    READ_ONLY_TOOLS,
+    WEB_TOOLS,
+    SUBAGENT_TOOLS,
+    RUN_COMMANDS_TOOLS,
+    REPAIR_TOOLS
   } from "./lib/droid.mjs";
 import { resolveRuntimeOptions } from "./lib/runtime-options.mjs";
 import { withFileLockSync } from "./lib/file-lock.mjs";
@@ -97,9 +103,7 @@ const TOOL_FENCE_OPTIONS = ["run-commands", "mcp-tool", "no-web", "no-subagents"
 const WORKER_PATH_OPTIONS = ["output-schema", "result-file", "notify-socket", "mcp-config", "brief", "instructions", "preread", "worktree"];
 // Per-turn input: the resumed thread already holds the previous slice's brief and preread.
 const PER_TURN_WORKER_OPTIONS = ["brief", "preread"];
-// Commands whose spawned droid takes -m/-r from resolveModelChoice. A new one must be added here and to the model-choice test matrix.
-export { JOB_KINDS };
-export const MODEL_RESOLVING_COMMANDS = ["task", "task --fork", "review", "adversarial-review", "compare", "verify-claims", "mission"];
+export { MODEL_RESOLVING_COMMANDS };
 // Worker flags a mission refuses: it runs one unnamed, non-pausing turn at --auto high with droid's own toolset.
 const MISSION_REJECTED_VALUE_FLAGS = ["name", "fanout", "brief", "preread", "fork"];
 const MISSION_REJECTED_BOOLEAN_FLAGS = ["persistent", "pause-and-ask", "read-only", "run-commands", "write", "steerable", "spec"];
@@ -126,11 +130,14 @@ function printUsage() {
       "  node scripts/droid-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/droid-companion.mjs result [job-id] [--json]",
       "  node scripts/droid-companion.mjs cancel [job-id] [--json]",
-      "  node scripts/droid-companion.mjs sessions list|stop|resume [name] [prompt] [worker options] [--json]",
+      "  node scripts/droid-companion.mjs sessions list|find|stop|resume [name|text] [prompt] [worker options] [--json]",
       "  node scripts/droid-companion.mjs send <job|name> <message> | --file <path> | --end [--json]",
       "  node scripts/droid-companion.mjs answer <job|name> <answer> [--file <path>] [--json]",
       "  node scripts/droid-companion.mjs compare --brief <file> --schema <file> --against <command> [--json]",
       "  node scripts/droid-companion.mjs verify-claims <claims.json> [--json]",
+      "Internal (spawned by the companion and the rescue command, not for direct use):",
+      "  node scripts/droid-companion.mjs task-worker --cwd <dir> --job-id <id>",
+      "  node scripts/droid-companion.mjs task-resume-candidate [--json]",
       "Worker options: --output-schema <file> --result-file <file> --notify-socket <path>",
       "  --name <name> --persistent --pause-and-ask --brief <file> --instructions <file> --preread <file>",
       "  --worktree <path> --lock-cmd <command> --unlock-cmd <command>",
@@ -245,7 +252,12 @@ async function buildSetupReport(cwd, actionsTaken = []) {
     auth: authStatus,
     sessionRuntime: getSessionRuntimeStatus(process.env, workspaceRoot),
     reviewGateEnabled: Boolean(config.stopReviewGate),
+    toolFence: {
+      readOnly: READ_ONLY_TOOLS, web: WEB_TOOLS, subagents: SUBAGENT_TOOLS,
+      runCommands: RUN_COMMANDS_TOOLS, schemaRepair: REPAIR_TOOLS
+    },
     defaults,
+    defaultsApplyTo: MODEL_RESOLVING_COMMANDS,
     defaultSources: Object.fromEntries(["model", "effort"].map(field => [field, !defaults[field] ? null : fromEnv[field] ? ENV_DEFAULT_NAMES[field] : "defaults.json"])),
     actionsTaken,
     nextSteps
@@ -691,6 +703,7 @@ function getJobKindLabel(kind, jobClass) {
 }
 
 function createCompanionJob({ prefix, kind, title, workspaceRoot, jobClass, summary, write = false }) {
+  if (!JOB_KINDS.includes(kind)) throw new Error(`Unknown job kind "${kind}"`);
   return createJobRecord({
     id: generateJobId(prefix),
     kind,

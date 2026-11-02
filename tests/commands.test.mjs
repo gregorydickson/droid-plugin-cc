@@ -250,3 +250,46 @@ test("mission command forwards a background mission and states what a mission ru
   const hint = source.match(/^argument-hint: '(.*)'$/m)?.[1] ?? "";
   assert.deepEqual(flagsIn(hint), accepted, "argument-hint lists exactly the flags the companion's mission accepts");
 });
+
+const COMPANION = path.join(PLUGIN_ROOT, "scripts", "droid-companion.mjs");
+const SCRIPTS_DIR = path.join(PLUGIN_ROOT, "scripts");
+
+const usageSubcommands = () => new Set(
+  [...run(process.execPath, [COMPANION, "help"]).stdout.matchAll(/droid-companion\.mjs ([a-z][a-z-]*)/g)].map(match => match[1])
+);
+const dispatchedSubcommands = () => {
+  const source = fs.readFileSync(COMPANION, "utf8");
+  const body = source.slice(source.indexOf("switch (subcommand)"), source.indexOf("default:", source.indexOf("switch (subcommand)")));
+  return new Set([...body.matchAll(/case "([^"]+)":/g)].map(match => match[1]));
+};
+
+test("the companion usage text names exactly the subcommands main dispatches", () => {
+  const usage = usageSubcommands();
+  const dispatched = dispatchedSubcommands();
+  assert.ok(usage.has("mission") && usage.has("send") && usage.has("sessions"), "usage extraction found the new subcommands");
+  assert.deepEqual(usage.difference(dispatched), new Set(), "usage lists a subcommand main does not dispatch");
+  assert.deepEqual(dispatched.difference(usage), new Set(), "main dispatches a subcommand the usage text omits");
+});
+
+test("the sessions usage line names every action handleSessions accepts", () => {
+  const line = run(process.execPath, [COMPANION, "help"]).stdout.split("\n").find(entry => entry.includes("droid-companion.mjs sessions "));
+  const actions = new Set(line.match(/sessions ([a-z|]+)/)[1].split("|"));
+  assert.deepEqual(actions, new Set(["list", "find", "stop", "resume"]));
+});
+
+const productionFiles = () => fs.readdirSync(SCRIPTS_DIR, { recursive: true }).filter(file => file.endsWith(".mjs")).map(file => path.join(SCRIPTS_DIR, file));
+
+test("every export the wiring depends on is used by a production module outside its defining module", () => {
+  const withoutModuleLinks = text => text.replace(/^\s*(?:import|export)\s*\{[^}]*\}(?:\s*from\s*"[^"]*")?;?/gm, "");
+  const sources = new Map(productionFiles().map(file => [file, withoutModuleLinks(fs.readFileSync(file, "utf8"))]));
+  const definingFile = name => [...sources].find(([, text]) => new RegExp(`export (?:async )?(?:function|const) ${name}\\b`).test(text))?.[0];
+  const names = [
+    "READ_ONLY_TOOLS", "WEB_TOOLS", "SUBAGENT_TOOLS", "RUN_COMMANDS_TOOLS", "REPAIR_TOOLS", "getDroidVersion", "droidCapabilities",
+    "requireDroidCapability", "JOB_KINDS", "MODEL_RESOLVING_COMMANDS", "findJobs", "getGlobalDefaults", "setGlobalDefaults", "effortWarning", "runSteerableSession"
+  ];
+  const orphans = names.filter(name => {
+    const home = definingFile(name);
+    return !home || ![...sources].some(([file, text]) => file !== home && new RegExp(`\\b${name}\\b`).test(text));
+  });
+  assert.deepEqual(orphans, [], "exports with no importer outside their defining module");
+});
