@@ -1,6 +1,6 @@
 ---
 description: Delegate investigation, an explicit fix request, or follow-up rescue work to the Droid rescue subagent
-argument-hint: "[--background|--wait] [--resume|--fresh] [--write|--run-commands] [--mcp-tool <server[/tool]>] [--model <model>] [--effort <off|none|minimal|low|medium|high|xhigh|max>] [what Droid should investigate, solve, or continue]"
+argument-hint: "[--background|--wait] [--resume|--fresh] [--write|--run-commands] [--mcp-tool <server[/tool]>] [--no-web] [--no-subagents] [--fork <job|name>] [--spec] [--spec-model <model>] [--spec-effort <level>] [--model <model>] [--effort <off|none|minimal|low|medium|high|xhigh|max>] [what Droid should investigate, solve, or continue]"
 allowed-tools: Bash(node:*), AskUserQuestion, Agent
 ---
 
@@ -48,3 +48,6 @@ Operating rules:
 - If the user did not supply a request, ask what Droid should investigate or fix.
 
 Default to read-only. Preserve an explicit `--write` flag; the runtime maps it to Factory `--auto medium`. Preserve `--run-commands` (run tests and commands with no file-editing tools; not a write fence) and `--mcp-tool` flags the same way. Model IDs pass through unchanged.
+- `--no-web` and `--no-subagents` drop the web tools / the subagent tools from a read-only job. They are refused with `--write`, which keeps Droid's default toolset. The stop-time review gate always runs with `--no-web`.
+- `--fork <job|name>` starts a new Droid thread branched from an existing job or named session instead of continuing it. Forward it unchanged to `task`.
+- `--spec` runs the task in Droid's spec mode (it needs a Droid CLI that supports spec). `--spec-model` and `--spec-effort` choose the spec model and effort and are refused without `--spec`.

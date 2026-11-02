@@ -15,3 +15,5 @@ If the user did not pass a job ID:
 If the user did pass a job ID:
 - Present the full command output to the user.
 - Do not summarize or condense it.
+
+To search jobs and sessions by text, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/droid-companion.mjs" sessions find <text>` and present its output as-is.

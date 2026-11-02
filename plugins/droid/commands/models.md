@@ -11,3 +11,4 @@ Present the full command output to the user as a Markdown table. Do not drop row
 - Preserve the model IDs exactly; they are the values `--model` accepts.
 - Keep the CLI default model and any plugin defaults (`DROID_DEFAULT_MODEL`, `DROID_DEFAULT_EFFORT`) shown above the table.
 - Reasoning efforts vary per model; a model marked "not supported" ignores `--effort`.
+- The output also lists Droid's tier aliases (for example `glm-{...}`) and version wildcards (for example `glm-*`). They are not rows in the table and pass through to `--model` unchanged.
