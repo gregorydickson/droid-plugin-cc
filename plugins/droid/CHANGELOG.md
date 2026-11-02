@@ -7,6 +7,7 @@
 - Read-only jobs now get a wider toolbox: the web tools, `Skill`, `ToolSearch`, `TodoWrite` and the subagent tools join `Read,LS,Grep,Glob,Execute`. `--no-web` and `--no-subagents` drop those groups, and the stop-time review gate runs with `--no-web`. `--run-commands` and schema repair keep the narrow five.
 - Live steering decision: GO. `task --steerable --background` holds one `droid exec` child open on stdin, and `send JOB MESSAGE` (or `--file`, or `--end`) adds a user turn to it. Model, effort, autonomy and the tool list all go over JSON-RPC and are confirmed by droid, so a steered job keeps the same fence as a one-shot turn. `mission` and the stop hook never use it; `docs/live-steering.md` records the measurements.
 - `task --fork JOB|NAME` branches a new linked job from an existing job or named session.
+- A resumed or forked turn of a `--steerable` job runs as an ordinary one-shot task turn: it is tagged, its record is not steerable and carries no socket path, and `--steerable` on `sessions resume` or `task --fork` is refused.
 - Defaults and aliases: `--model` accepts Droid's latest-model aliases and version wildcards, `/droid:models` lists the aliases and the defaults in effect, and `/droid:setup` labels each default with its real source.
 - Developer instructions go to the model through `--append-system-prompt-file` instead of the user prompt (not on schema-repair turns).
 - `task --spec` with `--spec-model` and `--spec-effort` maps to Droid spec mode.
