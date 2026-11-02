@@ -57,6 +57,14 @@ function startAndAwaitFirstAnswer(f, options = {}) {
   return answered.then(() => session);
 }
 
+test("a steered turn logs each tool once by its use id, including the tools a code-mode Script runs", { timeout: TEST_TIMEOUT_MS }, async () => {
+  const f = fixture("code-mode-tools");
+  const progress = [];
+  const result = await runSteerableSession(f.cwd, { prompt: "first", env: f.env, onProgress: ({ message }) => progress.push(message) }).done;
+  assert.equal(result.status, 0, JSON.stringify(result.error));
+  assert.deepEqual(progress.filter(message => message.startsWith("Running tool: ")), ["Script", "Execute", "WebSearch"].map(tool => `Running tool: ${tool}`));
+});
+
 for (const sandbox of SANDBOXES) {
   test(`a steered ${sandbox} job sets the one-shot turn's model, effort, autonomy and tool list over JSON-RPC`, { timeout: TEST_TIMEOUT_MS }, async () => {
     const f = fixture();

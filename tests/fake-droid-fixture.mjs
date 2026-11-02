@@ -13,6 +13,25 @@ export const SESSION_USAGE = [
 export const DOCTOR_FIXTURE = fileURLToPath(new URL("./fixtures/droid-doctor-1.1.0.json", import.meta.url));
 export const HELP_FIXTURE = fileURLToPath(new URL("./fixtures/droid-exec-help-0.238.0.txt", import.meta.url));
 
+// What gpt-6.1-sol streamed on droid 1.1.0 for one code-mode Script that ran Execute and WebSearch
+// inside it: a tool_call per streamed input delta of the Script, then create_message for the Script
+// and for each inner call (marked scriptExecution). Behavior "code-mode-tools" emits it before answering.
+export const CODE_MODE_SCRIPT_ID = "call_script_1";
+const inner = (id, name, input) => ({ type: "create_message", message: { id: "repl-tool-call:" + id, role: "assistant", content: [{ type: "tool_use", id, name, input, scriptExecution: { runId: CODE_MODE_SCRIPT_ID, outerToolUseId: CODE_MODE_SCRIPT_ID } }] } });
+export const CODE_MODE_NOTIFICATIONS = [
+  { type: "tool_call", toolUse: { type: "tool_use", id: CODE_MODE_SCRIPT_ID, name: "Script", input: {} } },
+  { type: "tool_call", toolUse: { type: "tool_use", id: CODE_MODE_SCRIPT_ID, name: "Script", input: { script: "await tools.Exec" } } },
+  { type: "tool_call", toolUse: { type: "tool_use", id: CODE_MODE_SCRIPT_ID, name: "Script", input: { script: "await tools.Execute({ command: 'git log -1' }); await tools.WebSearch({ query: 'node' });" } } },
+  { type: "tool_execution_phase_changed", toolUseId: CODE_MODE_SCRIPT_ID, toolName: "Script", phase: "executing" },
+  { type: "create_message", message: { id: "outer", role: "assistant", content: [{ type: "tool_use", id: CODE_MODE_SCRIPT_ID, name: "Script", input: { script: "..." } }] } },
+  inner("inner-1", "Execute", { command: "git log -1" }),
+  { type: "tool_progress_update", toolUseId: "inner-1", toolName: "Execute", update: { type: "status", text: "" } },
+  { type: "tool_result", toolUseId: "inner-1", content: "abc", isError: false },
+  inner("inner-2", "WebSearch", { query: "node" }),
+  { type: "tool_result", toolUseId: "inner-2", content: "https://nodejs.org", isError: false },
+  { type: "tool_result", toolUseId: CODE_MODE_SCRIPT_ID, content: [{ type: "text", text: "done" }], isError: false }
+];
+
 export function installFakeDroid(binDir, behavior = "review-ok", worker = false) {
   const statePath = path.join(binDir, "fake-droid-state.json");
   const source = `#!/usr/bin/env node
@@ -22,6 +41,7 @@ const STATE_PATH = ${JSON.stringify(statePath)};
 const SESSION_USAGE = ${JSON.stringify(SESSION_USAGE)};
 const BEHAVIOR = ${JSON.stringify(behavior)};
 const WORKER = ${JSON.stringify(worker)};
+const CODE_MODE_NOTIFICATIONS = ${JSON.stringify(CODE_MODE_NOTIFICATIONS)};
 const args = process.argv.slice(2);
 const arg = flag => args[args.indexOf(flag) + 1];
 if (args[0] === "--version") { console.log("droid-cli test " + (process.env.FAKE_DROID_VERSION ?? "1.1.0")); process.exit(0); }
@@ -125,6 +145,7 @@ if (BEHAVIOR === "writes-file") fs.writeFileSync(require("node:path").join(proce
 const finish = () => {
   if (BEHAVIOR === "warning-success") notify({ type: "error", message: "Temporary model error" });
   if (BEHAVIOR === "blank-lines") console.log("  ");
+  if (BEHAVIOR === "code-mode-tools") CODE_MODE_NOTIFICATIONS.forEach(notify);
   notify({ type: "assistant_text_delta", messageId: "answer", blockIndex: 0, textDelta: payload.slice(0, 7) });
   notify({ type: "assistant_text_delta", messageId: "answer", blockIndex: 0, textDelta: payload.slice(7) });
   notify({ type: "assistant_text_complete", messageId: "answer", blockIndex: 0 });
@@ -174,6 +195,7 @@ function runInputSession() {
     const payload = BEHAVIOR === "repair-once" || BEHAVIOR === "invalid-json" ? "not valid json"
       : texts.some(text => text.includes("Return only JSON")) ? JSON.stringify({ count: 2 }) : "Answered: " + texts.join(" + ");
     const messageId = "answer-" + turns;
+    if (BEHAVIOR === "code-mode-tools") CODE_MODE_NOTIFICATIONS.forEach(notify);
     notify({ type: "assistant_text_delta", messageId, blockIndex: 0, textDelta: payload.slice(0, 5) });
     notify({ type: "assistant_text_delta", messageId, blockIndex: 0, textDelta: payload.slice(5) });
     notify({ type: "assistant_text_complete", messageId, blockIndex: 0 });

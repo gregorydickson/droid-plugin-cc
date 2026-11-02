@@ -38,6 +38,13 @@ test("Droid streams progress, returns usage, maps controls, and resumes its sess
   assert.equal(args[args.indexOf("--session-id") + 1], first.threadId);
   assert.equal(args[args.indexOf("--auto") + 1], "medium");
 });
+test("a one-shot turn logs each tool once by its use id, including the tools a code-mode Script runs", async t => {
+  fixture(t, "code-mode-tools");
+  const progress = [];
+  const result = await runDroidTurn(makeTempDir(), { prompt: "Count", onProgress: event => progress.push(event.message) });
+  assert.equal(result.status, 0, JSON.stringify(result.error));
+  assert.deepEqual(progress.filter(message => message.startsWith("Running tool: ")), ["Script", "Execute", "WebSearch"].map(tool => `Running tool: ${tool}`));
+});
 test("schema repair takes the repair turn's session-inclusive usage, not a sum", async t => {
   const state = fixture(t, "repair-once");
   const result = await runDroidTurn(makeTempDir(), { prompt: "Count", outputSchema: schema, sandbox: "workspace-write" });

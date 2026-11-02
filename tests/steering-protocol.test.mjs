@@ -8,6 +8,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { makeTempDir, smokeEnv } from "./helpers.mjs";
+import { startedTools } from "../plugins/droid/scripts/lib/droid.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DOC = fs.readFileSync(path.join(ROOT, "docs/live-steering.md"), "utf8");
@@ -27,6 +28,8 @@ const note = message => message.params?.notification;
 const isResponse = (message, id) => message.id === id && ("result" in message || "error" in message);
 const isConfirmation = (message, id) => note(message)?.type === "settings_updated" && note(message).requestId === id;
 const turnEnded = message => note(message)?.type === "agent_turn_completed";
+// Every tool a run of messages started, the tools a code-mode Script runs included.
+const toolsStarted = messages => { const ids = new Set(); return messages.flatMap(m => note(m) ? startedTools(note(m), ids) : []); };
 
 function settableRows(doc) {
   const section = doc.split("## What can be set")[1].split("\n## ")[0];
@@ -111,7 +114,7 @@ test("the captured transcript shows a read-only tool list refusing the Create pr
   const turn = TRANSCRIPT.slice(from).map(row => row.msg);
   const end = turn.findIndex(turnEnded);
   assert.ok(end > 0, "the probe turn completed");
-  const toolCalls = turn.slice(0, end).filter(m => note(m)?.type === "tool_call").map(m => note(m).toolUse.name);
+  const toolCalls = toolsStarted(turn.slice(0, end));
   assert.ok(!toolCalls.includes("Create"), `no Create call in the probe turn: ${toolCalls}`);
 });
 
@@ -180,7 +183,7 @@ test("live: real Droid confirms every captured setting request and the read-only
     const { mark } = await session.request(probe.method, probe.params);
     const end = await session.waitFor(turnEnded, mark, 240000, "the probe turn");
     assert.equal(note(end).reason, "completed");
-    const toolCalls = session.outputs.slice(mark).filter(m => note(m)?.type === "tool_call").map(m => note(m).toolUse.name);
+    const toolCalls = toolsStarted(session.outputs.slice(mark));
     assert.ok(!toolCalls.includes("Create"), `no Create call: ${toolCalls}`);
     assert.ok(!fs.existsSync(path.join(cwd, PROBE_FILE)), `${PROBE_FILE} was not written`);
   } finally {

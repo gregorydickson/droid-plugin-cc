@@ -347,6 +347,23 @@ function recordAssistantText(messages, n) {
   if (n.type === "assistant_message_retracted") messages.delete(n.messageId);
 }
 
+/**
+ * The tools one session notification starts, each tool use named once (`started` holds the ids seen).
+ * droid re-sends a tool_call for every streamed delta of a call's input, and a GPT model's code-mode
+ * `Script` runs real tools inside the script: those reach the stream only as create_message
+ * tool_use blocks (marked scriptExecution), never as tool_call.
+ */
+export function startedTools(n, started) {
+  const uses = n.type === "tool_call" ? [n.toolUse]
+    : n.type === "create_message" && n.message?.role === "assistant" ? (n.message.content ?? []).filter(block => block?.type === "tool_use")
+    : [];
+  return uses.filter(Boolean).flatMap(use => {
+    if (use.id != null && started.has(use.id)) return [];
+    if (use.id != null) started.add(use.id);
+    return [use.name ?? "tool"];
+  });
+}
+
 function executeTurn(cwd, options) {
   return new Promise((resolve, reject) => {
     const dir = createTempDir("droid-prompt-");
@@ -366,6 +383,7 @@ function executeTurn(cwd, options) {
     const turnId = `pid:${child.pid}:${processIdentity(child.pid) ?? "unverified"}`;
     const warnings = [];
     const emitted = new Set();
+    const startedToolIds = new Set();
     let terminalReason = null;
     const warn = message => { warnings.push({ message }); process.stderr.write(`${message}\n`); };
     const progress = (message, extra = {}) => {
@@ -419,10 +437,9 @@ function executeTurn(cwd, options) {
         if (n.type === "error") warnings.push(n);
         recordAssistantText(messages, n);
         if (n.type === "assistant_text_complete") emitMessage(n.messageId);
-        if (n.type === "tool_call") {
-          for (const id of messages.keys()) emitMessage(id);
-          progress(`Running tool: ${n.toolUse?.name ?? "tool"}`);
-        }
+        const tools = startedTools(n, startedToolIds);
+        if (tools.length) for (const id of messages.keys()) emitMessage(id);
+        for (const tool of tools) progress(`Running tool: ${tool}`);
         if (n.type === "agent_turn_completed") {
           completed = true; terminalReason = n.reason; usage = n.tokenUsage ?? null;
           for (const id of messages.keys()) emitMessage(id);
@@ -505,6 +522,7 @@ export function runSteerableSession(cwd, options = {}) {
   const queue = [`${instructions ? `${instructions}\n\n` : ""}${contract.basePrompt}${contract.suffix}`];
   const warnings = [];
   let threadId = null, error = null, usage = null, stderr = "", finalMessage = "", steeringWarning = null, completedTurns = 0;
+  const startedToolIds = new Set();
   let messages = new Map(), running = false, ending = false, inputClosed = false, graceKilled = false, idleTimer = null, graceTimer = null;
   const progress = (message, extra = {}) => {
     try {
@@ -586,7 +604,7 @@ export function runSteerableSession(cwd, options = {}) {
       if (!n) return;
       if (n.type === "error") warnings.push(n);
       recordAssistantText(messages, n);
-      if (n.type === "tool_call") progress(`Running tool: ${n.toolUse?.name ?? "tool"}`);
+      for (const tool of startedTools(n, startedToolIds)) progress(`Running tool: ${tool}`);
       if (n.type === "agent_turn_completed") onTurnCompleted(n);
     } catch (err) {
       fail({ message: `Invalid Droid protocol: ${err.message}` });
