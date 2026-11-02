@@ -88,6 +88,7 @@ const notify = FORMAT === "stream-jsonrpc"
   };
 if (FORMAT === "stream-jsonrpc") send({ type: "response", id: "init", result: { sessionId: threadId } });
 else line({ type: "system", subtype: "init", cwd: process.cwd(), tools: [] });
+if (BEHAVIOR === "quota-exhausted") { notify({ type: "error", message: "usage limit exceeded", code: "quota_exhausted", retryAfter: 60 }); process.exit(1); }
 if (BEHAVIOR === "auth-run-fails") { notify({ type: "error", message: "Authentication failed: sign in to Droid" }); process.exit(1); }
 if (BEHAVIOR === "stubborn-task") {
   const child = require("node:child_process").spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: "ignore" });

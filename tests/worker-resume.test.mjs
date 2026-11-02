@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { makeTempDir, initGitRepo, run } from "./helpers.mjs";
-import { buildEnv } from "./fake-droid-fixture.mjs";
+import { buildEnv, installFakeDroid } from "./fake-droid-fixture.mjs";
 import { installWorkerDroid } from "./worker-droid-fixture.mjs";
 import { readStoredJob } from "../plugins/droid/scripts/lib/job-control.mjs";
 import { writeJobFile } from "../plugins/droid/scripts/lib/state.mjs";
@@ -231,4 +231,19 @@ test("a named task, its sessions resume, and an answer each build a droid argv t
   const askingRequests = asking.fake().threadRequests;
   assert.deepEqual(askingRequests.map(entry => entry.method), ["start", "resume"]);
   for (const entry of askingRequests) assertExecArgv(entry, paused.threadId);
+});
+
+test("a resumed turn that succeeds drops the quota retry hint of the failed turn before it", () => {
+  const cwd = makeTempDir(); initGitRepo(cwd);
+  fs.writeFileSync(path.join(cwd, "README.md"), "hello\n");
+  git(cwd, "add", "README.md"); git(cwd, "commit", "-m", "init");
+  const bin = makeTempDir(); installFakeDroid(bin, "quota-exhausted");
+  const env = buildEnv(bin);
+  const cli = (...args) => JSON.parse(run(process.execPath, [script, ...args, "--json"], { cwd, env }).stdout);
+  const failed = cli("status", cli("task", "--background", "do the work").jobId, "--wait").job;
+  assert.deepEqual([failed.status, failed.errorCode, failed.retryAfter], ["failed", "quota_exhausted", 60]);
+  installFakeDroid(bin, "review-ok");
+  const resumed = cli("status", cli("task", "--background", "--resume-last", "try again").jobId, "--wait").job;
+  assert.equal(resumed.resumedFrom, failed.id);
+  assert.deepEqual([resumed.status, resumed.errorCode, resumed.retryAfter ?? null], ["completed", null, null]);
 });
