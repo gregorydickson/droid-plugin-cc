@@ -20,7 +20,7 @@ const KEYS = Object.keys(droidCapabilities(DROID_FEATURE_FLOOR));
 const expectAll = value => Object.fromEntries(KEYS.map(key => [key, value]));
 
 test("every capability flips together at the floor", () => {
-  assert.ok(KEYS.length > 0, "capability keys must exist");
+  assert.deepEqual(new Set(KEYS), new Set(["tag", "systemPromptFile", "mission", "fork", "spec", "steer", "readOnlyToolbox"]));
   for (const [version, expected] of [
     ["1.1.0", true],
     ["1.2.3", true],
