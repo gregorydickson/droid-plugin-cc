@@ -53,8 +53,11 @@ if (args.includes("--mission") && FORMAT !== "stream-json") {
   process.stderr.write("Invalid flags: --mission is not supported with one-shot --output-format stream-jsonrpc. Use --output-format stream-json, or drive the session with --input-format stream-jsonrpc.\\n");
   process.exit(1);
 }
+const loadState = () => fs.existsSync(STATE_PATH) ? JSON.parse(fs.readFileSync(STATE_PATH)) : { threads: [], threadRequests: [], execStarts: 0 };
+if (arg("--input-format") === "stream-jsonrpc") runInputSession();
+else {
 const prompt = fs.readFileSync(arg("-f"), "utf8");
-const state = fs.existsSync(STATE_PATH) ? JSON.parse(fs.readFileSync(STATE_PATH)) : { threads: [], threadRequests: [], execStarts: 0 };
+const state = loadState();
 state.execStarts++;
 const resume = args.includes("--session-id");
 const threadId = resume ? arg("--session-id") : crypto.randomUUID();
@@ -131,6 +134,72 @@ const finish = () => {
 if (BEHAVIOR === "interruptible-slow-task") setTimeout(finish, 5000);
 else if (BEHAVIOR === "slow-task") setTimeout(finish, 400);
 else finish();
+}
+}
+
+// A held-open JSON-RPC input session (docs/live-steering.md): one NDJSON request per stdin
+// line, every request recorded in state.inputRequests. initialize_session echoes the settings
+// it was given, minus any named in FAKE_DROID_IGNORE_SETTINGS. A message sent while a turn runs
+// is folded into that turn, as droid does, so each completion answers every message it saw.
+// FAKE_DROID_INPUT=exit quits on initialize without a completion; =permission asks the client
+// for a permission after initializing; =hold keeps running after stdin closes. FAKE_DROID_TURN_MS
+// sets how long a turn runs.
+function runInputSession() {
+  for (const flag of ["--tag", "--only-tools", "--auto", "--add-tools", "-m", "-r", "-f", "--session-id"]) if (args.includes(flag)) {
+    process.stderr.write("fake droid: " + flag + " is ignored with --input-format stream-jsonrpc\\n");
+    process.exit(3);
+  }
+  const sessionId = crypto.randomUUID();
+  const update = change => { const state = loadState(); change(state); fs.writeFileSync(STATE_PATH, JSON.stringify(state)); };
+  update(state => {
+    state.execStarts++; state.inputRequests = []; state.inputPid = process.pid; state.inputArgs = args;
+    state.threads.push({ id: sessionId, cwd: process.cwd() });
+  });
+  const ignored = new Set((process.env.FAKE_DROID_IGNORE_SETTINGS ?? "").split(",").filter(Boolean));
+  const mode = process.env.FAKE_DROID_INPUT ?? "";
+  const turnMs = Number(process.env.FAKE_DROID_TURN_MS ?? 50);
+  const envelope = { jsonrpc: "2.0", factoryApiVersion: "1.0.0", factoryProtocolVersion: "1.289.0" };
+  const send = msg => process.stdout.write(JSON.stringify({ ...envelope, ...msg }) + "\\n");
+  const notify = notification => send({ type: "notification", method: "droid.session_notification", params: { sessionId, notification } });
+  const [first, second] = SESSION_USAGE;
+  const sessionUsage = n => Object.fromEntries(Object.keys(first).map(key => [key, first[key] + (n - 1) * (second[key] - first[key])]));
+  let turns = 0, running = null;
+  const completeTurn = () => {
+    const { turnId, texts } = running;
+    running = null;
+    turns++;
+    update(state => { state.sessionTurns = { ...state.sessionTurns, [sessionId]: turns }; });
+    const payload = BEHAVIOR === "repair-once" || BEHAVIOR === "invalid-json" ? "not valid json"
+      : texts.some(text => text.includes("Return only JSON")) ? JSON.stringify({ count: 2 }) : "Answered: " + texts.join(" + ");
+    const messageId = "answer-" + turns;
+    notify({ type: "assistant_text_delta", messageId, blockIndex: 0, textDelta: payload.slice(0, 5) });
+    notify({ type: "assistant_text_delta", messageId, blockIndex: 0, textDelta: payload.slice(5) });
+    notify({ type: "assistant_text_complete", messageId, blockIndex: 0 });
+    const cumulative = sessionUsage(turns), previous = turns > 1 ? sessionUsage(turns - 1) : null;
+    const tokenUsage = Object.fromEntries(Object.entries(cumulative).map(([key, value]) => [key, value - (previous?.[key] ?? 0)]));
+    notify({ type: "agent_turn_completed", reason: "completed", turnId, tokenUsage, cumulativeTokenUsage: cumulative });
+  };
+  const lines = require("node:readline").createInterface({ input: process.stdin });
+  lines.on("line", raw => {
+    if (!raw.trim()) return;
+    const msg = JSON.parse(raw);
+    update(state => { state.inputRequests.push(msg); });
+    if (msg.type !== "request") return;
+    if (msg.method === "droid.initialize_session") {
+      if (mode === "exit") process.exit(0);
+      const settings = Object.fromEntries(Object.entries(msg.params).filter(([key]) => !["cwd", "machineId"].includes(key) && !ignored.has(key)));
+      send({ type: "response", id: msg.id, result: { sessionId, session: { messages: [] }, settings } });
+      if (mode === "permission") send({ type: "request", id: "permission-1", method: "droid.request_permission", params: {} });
+      return;
+    }
+    send({ type: "response", id: msg.id, result: {} });
+    if (msg.method !== "droid.add_user_message") return;
+    if (running) { running.texts.push(msg.params.text); return; }
+    running = { turnId: msg.id, texts: [msg.params.text] };
+    setTimeout(completeTurn, turnMs);
+  });
+  if (mode === "hold") setInterval(() => {}, 1000);
+  else lines.on("close", () => process.exit(0));
 }
 function nativeReviewText(target) {
   if (target.type === "baseBranch") {

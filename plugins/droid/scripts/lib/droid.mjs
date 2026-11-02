@@ -1,7 +1,9 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
+import { isDeepStrictEqual } from "node:util";
 import { createTempDir, readJsonFile } from "./fs.mjs";
 import { binaryAvailable, runCommand, terminateProcessTree } from "./process.mjs";
 import { validateOutputSchema } from "./job-results.mjs";
@@ -71,10 +73,11 @@ export function getSessionRuntimeStatus() {
 export const DROID_DOCTOR_CHECKS = "config,auth,connectivity";
 const DOCTOR_TIMEOUT_DEFAULT_MS = 15000;
 
-function doctorTimeoutMs(env) {
-  const parsed = Number(env.DROID_DOCTOR_TIMEOUT_MS);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DOCTOR_TIMEOUT_DEFAULT_MS;
+function positiveMs(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
+const doctorTimeoutMs = env => positiveMs(env.DROID_DOCTOR_TIMEOUT_MS, DOCTOR_TIMEOUT_DEFAULT_MS);
 
 /** Runs `droid doctor --json` in its own process group so a hung connectivity check dies with its children. */
 function runDoctor(cwd, env = process.env) {
@@ -173,17 +176,28 @@ export function createQuotaError(source) {
 
 /** One child per turn. stdout is newline-delimited Factory JSON-RPC, never prose. */
 export async function runDroidTurn(cwd, options = {}) {
-  let prompt = options.prompt?.trim() || options.defaultPrompt || "";
-  if (!prompt) throw new Error("A prompt is required for this Droid run.");
-  const schema = options.pauseAndAsk && options.outputSchema != null ? buildPauseOutputSchema(options.outputSchema) : options.outputSchema;
-  const validate = schema != null ? validateOutputSchema(schema) : null;
-  if (schema != null) prompt += `\n\nReturn only JSON matching this JSON schema (no Markdown fences):\n${JSON.stringify(schema)}`;
-  if (options.pauseAndAsk && schema != null) prompt += '\nUse state "completed" with result populated, null question/draftAnswer and empty facts/itemsHeld; or state "awaiting-answer" with result null and a specific question, draftAnswer, facts and itemsHeld.';
+  const contract = turnContract(options);
+  let prompt = contract.basePrompt + contract.suffix;
   const instructions = options.developerInstructions;
   const instructionsInSystemPrompt = Boolean(instructions) && droidCapabilities(getDroidVersion(options.env ?? process.env).version).systemPromptFile;
   if (instructions && !instructionsInSystemPrompt) prompt = `${instructions}\n\n${prompt}`;
   const turnOptions = { ...options, systemPromptText: instructionsInSystemPrompt ? instructions : undefined };
-  let result = await executeTurn(cwd, { ...turnOptions, prompt });
+  return settleTurn(cwd, await executeTurn(cwd, { ...turnOptions, prompt }), contract, turnOptions);
+}
+
+/** The prompt, the output schema (wrapped for pause-and-ask) and the text appended to every user turn so the answer matches it. */
+function turnContract(options) {
+  const basePrompt = options.prompt?.trim() || options.defaultPrompt || "";
+  if (!basePrompt) throw new Error("A prompt is required for this Droid run.");
+  const schema = options.pauseAndAsk && options.outputSchema != null ? buildPauseOutputSchema(options.outputSchema) : options.outputSchema;
+  let suffix = "";
+  if (schema != null) suffix += `\n\nReturn only JSON matching this JSON schema (no Markdown fences):\n${JSON.stringify(schema)}`;
+  if (options.pauseAndAsk && schema != null) suffix += '\nUse state "completed" with result populated, null question/draftAnswer and empty facts/itemsHeld; or state "awaiting-answer" with result null and a specific question, draftAnswer, facts and itemsHeld.';
+  return { basePrompt, schema, validate: schema != null ? validateOutputSchema(schema) : null, suffix };
+}
+
+/** Schema validation with one read-only repair turn, then the pause-and-ask unwrap, on a turn's final message. */
+async function settleTurn(cwd, result, { schema, validate }, turnOptions) {
   if (validate && result.status === 0) {
     let valid;
     try { valid = validate(JSON.parse(result.finalMessage)); } catch { valid = false; }
@@ -201,7 +215,7 @@ export async function runDroidTurn(cwd, options = {}) {
       result.error ??= { message: `Droid output failed schema validation after one repair: ${error.message}` };
     }
   }
-  if (options.pauseAndAsk && schema != null && result.status === 0) result.finalMessage = unwrapPauseOutput(result.finalMessage).rawOutput;
+  if (turnOptions.pauseAndAsk && schema != null && result.status === 0) result.finalMessage = unwrapPauseOutput(result.finalMessage).rawOutput;
   return result;
 }
 
@@ -224,6 +238,20 @@ export function normalizeMcpToolSelector(value) {
     throw new Error(`Invalid --mcp-tool "${value}". Use <server> or <server>/<tool>; percent-encode a "/", "," or space inside a name.`);
   }
   return selector;
+}
+
+/**
+ * The autonomy and tool list a sandbox runs under: `autonomy` is null for droid's default,
+ * `onlyTools` is the exact tool list or null for droid's default toolset, `addTools` the MCP
+ * selectors added to that default. A repair is always read-only over REPAIR_TOOLS without MCP.
+ */
+function sandboxFence(options) {
+  const sandbox = options.repair ? "read-only" : options.sandbox;
+  const mcpSelectors = options.repair ? [] : (options.mcpTools ?? []).map(selector => `MCP:${normalizeMcpToolSelector(selector)}`);
+  const autonomy = sandbox === "workspace-write" || sandbox === "run-commands" ? "medium" : null;
+  if (sandbox === "workspace-write") return { autonomy, onlyTools: null, addTools: mcpSelectors };
+  const tools = options.repair ? REPAIR_TOOLS : sandbox === "run-commands" ? RUN_COMMANDS_TOOLS : readOnlyTools(options);
+  return { autonomy, onlyTools: [...tools, ...mcpSelectors], addTools: [] };
 }
 
 /**
@@ -256,13 +284,12 @@ export function buildDroidExecArgs(cwd, file, options = {}) {
   if (options.tag && !JOB_KINDS.includes(options.tag.kind)) throw new Error(`Unknown job kind "${options.tag.kind}"`);
   const mission = Boolean(options.mission) && !options.repair;
   const args = ["exec", "--output-format", resume || fork || mission ? "stream-json" : "stream-jsonrpc", "--cwd", cwd, "-f", file];
-  const sandbox = options.repair ? "read-only" : options.sandbox;
-  const mcpSelectors = options.repair ? [] : (options.mcpTools ?? []).map(selector => `MCP:${normalizeMcpToolSelector(selector)}`);
+  const fence = sandboxFence(options);
   if (mission) args.push("--mission", "--auto", "high");
   else {
-    if (sandbox === "workspace-write" || sandbox === "run-commands") args.push("--auto", "medium");
-    if (sandbox !== "workspace-write") args.push("--only-tools", [...(options.repair ? REPAIR_TOOLS : sandbox === "run-commands" ? RUN_COMMANDS_TOOLS : readOnlyTools(options)), ...mcpSelectors].join(","));
-    else if (mcpSelectors.length) args.push("--add-tools", mcpSelectors.join(","));
+    if (fence.autonomy) args.push("--auto", fence.autonomy);
+    if (fence.onlyTools) args.push("--only-tools", fence.onlyTools.join(","));
+    else if (fence.addTools.length) args.push("--add-tools", fence.addTools.join(","));
   }
   if (options.model) args.push("-m", options.model);
   if (options.effort) args.push("-r", options.effort);
@@ -294,6 +321,22 @@ export function streamJsonUsage(usage) {
   return Object.fromEntries(Object.entries(keys).filter(([key]) => typeof usage[key] === "number").map(([key, name]) => [name, usage[key]]));
 }
 
+const blocksText = blocks => [...blocks.entries()].sort((a, b) => a[0] - b[0]).map(([, text]) => text).join("");
+
+/** Folds one session notification into `messages` (message id → block index → text). */
+function recordAssistantText(messages, n) {
+  if (n.type === "assistant_text_delta") {
+    const blocks = messages.get(n.messageId) ?? new Map();
+    blocks.set(n.blockIndex, (blocks.get(n.blockIndex) ?? "") + n.textDelta);
+    messages.set(n.messageId, blocks);
+  }
+  if (n.type === "create_message" && n.message?.role === "assistant") {
+    const blocks = new Map((n.message.content ?? []).flatMap((block, index) => block.type === "text" ? [[index, block.text]] : []));
+    if (blocks.size) messages.set(n.message.id, blocks);
+  }
+  if (n.type === "assistant_message_retracted") messages.delete(n.messageId);
+}
+
 function executeTurn(cwd, options) {
   return new Promise((resolve, reject) => {
     const dir = createTempDir("droid-prompt-");
@@ -323,7 +366,7 @@ function executeTurn(cwd, options) {
     };
     const emitMessage = id => {
       if (emitted.has(id) || !messages.has(id)) return;
-      const text = [...messages.get(id).entries()].sort((a, b) => a[0] - b[0]).map(([, text]) => text).join("");
+      const text = blocksText(messages.get(id));
       emitted.add(id);
       progress(text, { logTitle: "Droid output", logBody: text });
     };
@@ -364,17 +407,8 @@ function executeTurn(cwd, options) {
         const n = event.params?.notification;
         if (!n) return;
         if (n.type === "error") warnings.push(n);
-        if (n.type === "assistant_text_delta") {
-          const blocks = messages.get(n.messageId) ?? new Map();
-          blocks.set(n.blockIndex, (blocks.get(n.blockIndex) ?? "") + n.textDelta);
-          messages.set(n.messageId, blocks);
-        }
-        if (n.type === "create_message" && n.message?.role === "assistant") {
-          const blocks = new Map((n.message.content ?? []).flatMap((block, index) => block.type === "text" ? [[index, block.text]] : []));
-          if (blocks.size) messages.set(n.message.id, blocks);
-        }
+        recordAssistantText(messages, n);
         if (n.type === "assistant_text_complete") emitMessage(n.messageId);
-        if (n.type === "assistant_message_retracted") messages.delete(n.messageId);
         if (n.type === "tool_call") {
           for (const id of messages.keys()) emitMessage(id);
           progress(`Running tool: ${n.toolUse?.name ?? "tool"}`);
@@ -394,7 +428,7 @@ function executeTurn(cwd, options) {
       clearTimeout(timeout); process.off("SIGTERM", onSignal); process.off("SIGINT", onSignal);
       fs.rmSync(dir, { recursive: true, force: true });
       const last = [...messages.values()].at(-1);
-      const finalMessage = last ? [...last.entries()].sort((a, b) => a[0] - b[0]).map(([, text]) => text).join("") : "";
+      const finalMessage = last ? blocksText(last) : "";
       if (!completed || code !== 0) error ??= warnings.at(-1);
       if (!finalMessage.trim()) error ??= { message: stderr.trim() || "Droid returned no final assistant message." };
       if (!completed) error ??= { message: stderr.trim() || "Droid exited without a turn completion event." };
@@ -410,6 +444,180 @@ function executeTurn(cwd, options) {
     } catch (err) { error = { message: err.message }; stop(); }
   });
 }
+export const STEER_IDLE_DEFAULT_MS = 120000;
+const STEER_EXIT_GRACE_MS = 10000;
+const STEER_ENVELOPE = Object.freeze({ jsonrpc: "2.0", factoryApiVersion: "1.0.0", factoryProtocolVersion: "1.257.0" });
+// Session settings a steered job must have applied; droid not echoing one fails the job.
+const STEER_REQUIRED_SETTINGS = Object.freeze({ modelId: "model", reasoningEffort: "effort" });
+// Fence settings a steered job asks for; droid not echoing one runs the job on the session's value, with a warning.
+const STEER_FENCE_SETTINGS = Object.freeze({ autonomyLevel: "autonomy", restrictToolIds: "tool list", additionalToolIds: "tool list" });
+
+/** The initialize_session params that give a steered job the model, effort, autonomy and tool list a one-shot turn of its sandbox gets. */
+function steerSessionSettings(cwd, options) {
+  const fence = sandboxFence(options);
+  return {
+    machineId: TAG_NAME, cwd, interactionMode: "auto",
+    ...(options.model ? { modelId: options.model } : {}),
+    ...(options.effort ? { reasoningEffort: options.effort } : {}),
+    // A JSON-RPC session otherwise takes the user's default autonomy, so droid's exec default is named explicitly.
+    autonomyLevel: fence.autonomy ?? "off",
+    ...(fence.onlyTools ? { restrictToolIds: fence.onlyTools } : {}),
+    ...(fence.addTools.length ? { additionalToolIds: fence.addTools } : {})
+  };
+}
+
+/**
+ * One droid child held open on a stdin JSON-RPC session (docs/live-steering.md) for several
+ * user turns. Model, effort, autonomy and tool list travel in droid.initialize_session, never as
+ * argv. A message sent while a turn runs waits for that turn to complete, so every user turn gets
+ * its own completion (droid would fold it into the running turn). The session ends when a turn
+ * completes and nothing arrives for DROID_STEER_IDLE_MS (default STEER_IDLE_DEFAULT_MS), on
+ * end(), or when the child is cancelled; `done` then settles the final turn's message like
+ * runDroidTurn (schema validation, one repair, pause-and-ask), with the session's total usage.
+ */
+export function runSteerableSession(cwd, options = {}) {
+  const contract = turnContract(options);
+  const env = options.env ?? process.env;
+  const idleMs = positiveMs(env.DROID_STEER_IDLE_MS, STEER_IDLE_DEFAULT_MS);
+  const instructions = options.developerInstructions;
+  const { command, prefix } = invocation(env);
+  const child = spawn(command, [...prefix, "exec", "--input-format", "stream-jsonrpc", "--output-format", "stream-jsonrpc", "--cwd", cwd],
+    { cwd, env, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"], windowsHide: true, shell: process.platform === "win32" });
+  const turnId = `pid:${child.pid}:${processIdentity(child.pid) ?? "unverified"}`;
+  const requested = steerSessionSettings(cwd, options);
+  const initId = crypto.randomUUID();
+  const queue = [`${instructions ? `${instructions}\n\n` : ""}${contract.basePrompt}${contract.suffix}`];
+  const warnings = [];
+  let threadId = null, error = null, usage = null, stderr = "", finalMessage = "", steeringWarning = null, completedTurns = 0;
+  let messages = new Map(), running = false, ending = false, inputClosed = false, graceKilled = false, idleTimer = null, graceTimer = null;
+  const progress = (message, extra = {}) => {
+    try {
+      const pending = options.onProgress?.({ message, phase: "running", threadId, turnId, ...extra });
+      pending?.catch?.(() => {});
+    } catch { /* progress is best effort */ }
+  };
+  const write = message => { if (!inputClosed) child.stdin.write(`${JSON.stringify({ ...STEER_ENVELOPE, ...message })}\n`); };
+  const stop = () => { try { terminateProcessTree(child.pid, { signal: "SIGKILL" }); } catch { /* already gone */ } };
+  const closeInput = () => {
+    clearTimeout(idleTimer);
+    if (inputClosed) return;
+    inputClosed = true;
+    child.stdin.end();
+    graceTimer = setTimeout(() => { graceKilled = true; stop(); }, options.exitGraceMs ?? STEER_EXIT_GRACE_MS);
+  };
+  const drain = () => {
+    clearTimeout(idleTimer);
+    if (queue.length) {
+      running = true; messages = new Map();
+      write({ type: "request", id: crypto.randomUUID(), method: "droid.add_user_message", params: { text: queue.shift() } });
+    } else if (ending) closeInput();
+    else idleTimer = setTimeout(closeInput, idleMs);
+  };
+  const fail = failure => { error ??= failure; closeInput(); };
+  const onInitialized = result => {
+    threadId = result?.sessionId ?? null;
+    const settings = result?.settings ?? {};
+    const applied = field => isDeepStrictEqual(settings[field], requested[field]);
+    const missing = Object.keys(STEER_REQUIRED_SETTINGS).filter(field => field in requested && !applied(field));
+    if (missing.length) {
+      fail({ message: `Droid did not apply the steered job's ${missing.map(field => `${STEER_REQUIRED_SETTINGS[field]} (${requested[field]})`).join(" and ")}.` });
+      return;
+    }
+    const ignored = [...new Set(Object.keys(STEER_FENCE_SETTINGS).filter(field => field in requested && !applied(field)).map(field => STEER_FENCE_SETTINGS[field]))];
+    if (ignored.length) {
+      const names = ignored.join(" and ");
+      steeringWarning = `Droid input mode ignores the requested ${names}; this steered job runs with the session's ${names}.`;
+      warnings.push({ message: steeringWarning });
+    }
+    progress(`Session ready (${threadId}).`, { phase: "starting" });
+    drain();
+  };
+  const onTurnCompleted = n => {
+    running = false;
+    const last = [...messages.values()].at(-1);
+    if (last) finalMessage = blocksText(last);
+    usage = n.cumulativeTokenUsage ?? n.tokenUsage ?? usage;
+    if (n.reason !== "completed") { fail(warnings.at(-1) ?? { message: `Droid turn ended: ${n.reason}` }); return; }
+    completedTurns++;
+    if (last) progress(finalMessage, { logTitle: "Droid output", logBody: finalMessage });
+    drain();
+  };
+
+  const onSignal = () => stop();
+  process.on("SIGTERM", onSignal);
+  process.on("SIGINT", onSignal);
+  const timeout = options.timeoutMs == null ? null : setTimeout(() => { error ??= { message: "Droid run timed out." }; stop(); }, options.timeoutMs);
+  child.stdin.on("error", () => { inputClosed = true; });
+  child.stderr.on("data", data => { stderr = (stderr + data).slice(-65536); });
+  child.on("error", err => { error ??= { message: err.message }; });
+  createInterface({ input: child.stdout }).on("line", line => {
+    if (!line.trim()) return;
+    try {
+      const event = JSON.parse(line);
+      if (event.jsonrpc !== "2.0") throw new Error("Expected Factory JSON-RPC output.");
+      if (event.type === "request" && event.id != null) {
+        write({ type: "response", id: event.id, error: { code: -32601, message: `${TAG_NAME} does not handle ${event.method} in a steered job.` } });
+        return;
+      }
+      if (event.id === initId) {
+        if (event.error) fail(event.error);
+        else onInitialized(event.result);
+        return;
+      }
+      if (event.error) warnings.push(event.error);
+      if (event.method !== "droid.session_notification") return;
+      if (event.params?.sessionId && threadId && event.params.sessionId !== threadId) return;
+      const n = event.params?.notification;
+      if (!n) return;
+      if (n.type === "error") warnings.push(n);
+      recordAssistantText(messages, n);
+      if (n.type === "tool_call") progress(`Running tool: ${n.toolUse?.name ?? "tool"}`);
+      if (n.type === "agent_turn_completed") onTurnCompleted(n);
+    } catch (err) {
+      fail({ message: `Invalid Droid protocol: ${err.message}` });
+      stop();
+    }
+  });
+  const closed = new Promise((resolve, reject) => {
+    child.on("close", (code, signal) => {
+      clearTimeout(timeout); clearTimeout(idleTimer); clearTimeout(graceTimer);
+      process.off("SIGTERM", onSignal); process.off("SIGINT", onSignal);
+      inputClosed = true;
+      stop();
+      if (!completedTurns) error ??= { message: stderr.trim() || "Droid exited without a turn completion event." };
+      if (code !== 0 && !graceKilled) error ??= warnings.at(-1) ?? { message: `Droid exited with ${code ?? signal}.` };
+      if (!finalMessage.trim()) error ??= { message: stderr.trim() || "Droid returned no final assistant message." };
+      if (!threadId) error ??= { message: "Droid returned no session ID." };
+      if (isQuotaError(error)) { reject(createQuotaError(error)); return; }
+      resolve({ status: error ? 1 : 0, threadId, turnId, finalMessage, usage, error, warnings, stderr,
+        reasoningSummary: [], touchedFiles: [], fileChanges: [], commandExecutions: [], children: [] });
+    });
+  });
+  const done = closed
+    .then(result => settleTurn(cwd, result, contract, { ...options, systemPromptText: undefined }))
+    .then(result => (steeringWarning ? { ...result, steeringWarning } : result));
+
+  /** Queues `text` as the next user turn; it runs once the current turn completes. */
+  const sendUserTurn = text => {
+    if (ending || inputClosed) throw new Error("This steered Droid session has ended; start a new job or resume it with another prompt.");
+    queue.push(`${text}${contract.suffix}`);
+    if (threadId && !running) drain();
+  };
+  /** Accepts no further turns; the child exits once queued turns complete. */
+  const end = () => {
+    if (ending) return;
+    ending = true;
+    if (threadId && !running) drain();
+  };
+
+  write({ type: "request", id: initId, method: "droid.initialize_session", params: requested });
+  try {
+    progress("Starting Droid child.");
+    options.onActiveTurn?.({ threadId, turnId, send: async text => sendUserTurn(text) });
+  } catch (err) { fail({ message: err.message }); stop(); }
+  return { turnId, pid: child.pid, sendUserTurn, end, done };
+}
+
 export function buildPauseOutputSchema(schema) {
   if (!schema || typeof schema !== "object" || Array.isArray(schema)) throw new Error("--pause-and-ask with --output-schema requires an object schema.");
   const schemaMaps = new Set(["properties", "patternProperties", "$defs", "definitions", "dependentSchemas", "dependencies"]);
