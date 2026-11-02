@@ -462,6 +462,12 @@ const STEER_REQUIRED_SETTINGS = Object.freeze({ modelId: "model", reasoningEffor
 // Fence settings a steered job asks for; droid not echoing one runs the job on the session's value, with a warning.
 const STEER_FENCE_SETTINGS = Object.freeze({ autonomyLevel: "autonomy", restrictToolIds: "tool list", additionalToolIds: "tool list" });
 
+/** The warning a steered job carries when droid's input mode does not apply the named settings. */
+export function steeringIgnoredWarning(settings) {
+  const names = settings.join(" and ");
+  return `Droid input mode ignores the requested ${names}; this steered job runs with the session's ${names}.`;
+}
+
 /** The initialize_session params that give a steered job the model, effort, autonomy and tool list a one-shot turn of its sandbox gets. */
 function steerSessionSettings(cwd, options) {
   const fence = sandboxFence(options);
@@ -535,8 +541,7 @@ export function runSteerableSession(cwd, options = {}) {
     }
     const ignored = [...new Set(Object.keys(STEER_FENCE_SETTINGS).filter(field => field in requested && !applied(field)).map(field => STEER_FENCE_SETTINGS[field]))];
     if (ignored.length) {
-      const names = ignored.join(" and ");
-      steeringWarning = `Droid input mode ignores the requested ${names}; this steered job runs with the session's ${names}.`;
+      steeringWarning = steeringIgnoredWarning(ignored);
       warnings.push({ message: steeringWarning });
     }
     progress(`Session ready (${threadId}).`, { phase: "starting" });

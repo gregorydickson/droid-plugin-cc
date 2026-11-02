@@ -27,6 +27,7 @@ import {
     readOutputSchema,
     runDroidTurn,
     runSteerableSession,
+    steeringIgnoredWarning,
     JOB_KINDS,
     MODEL_RESOLVING_COMMANDS,
     readOnlyToolbox,
@@ -1054,9 +1055,7 @@ function recordedSteeringWarning() {
   let doc;
   try { doc = fs.readFileSync(LIVE_STEERING_DOC, "utf8"); } catch { return null; }
   const unsettable = /^Decision: GO-WARN — not settable: (.+)$/m.exec(doc)?.[1].split(",").map(name => name.trim()).filter(Boolean);
-  if (!unsettable?.length) return null;
-  const names = unsettable.join(" and ");
-  return `Droid input mode ignores the requested ${names}; this steered job runs with the session's ${names}.`;
+  return unsettable?.length ? steeringIgnoredWarning(unsettable) : null;
 }
 
 /** --steerable is validated per fresh task, on every sandbox; returns the decision's warning for the job record. */
